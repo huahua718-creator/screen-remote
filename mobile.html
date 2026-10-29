@@ -47,7 +47,6 @@
     #progress-container { display: none; margin-top: 10px; background: #e5e5ea; border-radius: 8px; overflow: hidden; height: 12px; }
     #progress-bar { width: 0%; height: 100%; background: #34c759; transition: width 0.1s; }
 
-    /* 翻頁控制列樣式 */
     .nav-pager-box { display: none; margin-bottom: 8px; padding: 8px; background: #e5e5ea; border-radius: 8px; text-align: center; }
     .nav-pager-btn { padding: 6px 16px; border-radius: 6px; border: none; background: #007aff; color: white; font-weight: bold; cursor: pointer; }
   </style>
@@ -105,18 +104,16 @@
       <button id="cam-start-btn" class="action-btn push-btn" onclick="startWebRTC('camera')">🎥 開啟手機全螢幕實時鏡頭</button>
     </div>
 
-    <!-- 3. 畫筆標註頁籤 (🌟 已將照片/PDF 翻頁按鈕改移至此處) -->
+    <!-- 3. 畫筆標註頁籤 -->
     <div id="draw-tab" class="tab-content card">
       <label id="draw-status-label">在畫布上手指滑動標註，大屏同步繪製：</label>
 
-      <!-- 🌟 相片翻頁列 -->
       <div id="photo-pager" class="nav-pager-box">
         <button class="nav-pager-btn" onclick="prevPhoto()">◄ 上一張</button>
         <span id="photo-indicator" style="margin: 0 10px; font-weight:bold; font-size:0.9rem;">1 / 1</span>
         <button class="nav-pager-btn" onclick="nextPhoto()">下一張 ►</button>
       </div>
 
-      <!-- 🌟 PDF 頁數翻頁列 -->
       <div id="pdf-pager" class="nav-pager-box">
         <button class="nav-pager-btn" onclick="prevPdfPage()">◄ 上一頁</button>
         <span id="pdf-indicator" style="margin: 0 10px; font-weight:bold; font-size:0.9rem;">第 1 / 1 頁</span>
@@ -174,12 +171,8 @@
 
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-    const firebaseConfig = {
-      apiKey: "AIzaSyBWa8b0rQl-qj-IWjP5hZntEi4ud_cOeVA",
-      authDomain: "screen-pusher.firebaseapp.com",
-      databaseURL: "https://screen-pusher-default-rtdb.asia-southeast1.firebasedatabase.app/",
-      projectId: "screen-pusher"
-    };
+    // 🌟 直接引入獨立設定檔
+    import { firebaseConfig } from "./firebase-config.js";
 
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
@@ -208,7 +201,6 @@
 
     document.addEventListener('DOMContentLoaded', () => { loadHistory(); listenToPageRequests(); });
 
-    // 監聽大屏傳來的翻頁要求
     window.listenToPageRequests = function() {
       const screenId = getScreenId(); if (!screenId) return;
       if (requestPageRef) off(requestPageRef);
@@ -292,7 +284,6 @@
       set(ref(db, 'screens/' + screenId), { mode: 'url', url: url, updatedAt: Date.now() });
     };
 
-    // 多圖選取
     window.handleGallerySelect = async function(e) {
       const files = Array.from(e.target.files);
       if (files.length === 0) return;
@@ -361,7 +352,6 @@
     window.prevPhoto = function() { sendPhotoIndex(currentPhotoIndex - 1); };
     window.nextPhoto = function() { sendPhotoIndex(currentPhotoIndex + 1); };
 
-    // PDF 文件處理
     window.handlePdfSelect = async function(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -434,7 +424,6 @@
       iceCandidateQueue = [];
     }
 
-    // P2P 影片檔推送
     window.handleVideoFileSelect = async function(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -528,7 +517,6 @@
       });
     };
 
-    // 實體鏡頭
     window.startWebRTC = async function(type) {
       try {
         const constraints = type === 'camera' 
@@ -684,7 +672,6 @@
       document.getElementById('live-eraser-btn').classList.toggle('active', isEraserMode);
     };
 
-    // 畫布塗鴉雙向同步
     const pad = document.getElementById('draw-pad');
     const pCtx = pad.getContext('2d');
     const liveCanvas = document.getElementById('live-draw-canvas');
@@ -745,7 +732,6 @@
     liveCanvas.addEventListener('mousemove', e => handleMove(e, lCtx, liveCanvas));
     liveCanvas.addEventListener('mouseup', handleEnd);
 
-    // 接收大屏端畫筆筆跡（雙向同步）
     const screenId = getScreenId();
     if (screenId) {
       onChildAdded(ref(db, `screens/${screenId}/drawEvents`), (snapshot) => {

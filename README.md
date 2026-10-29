@@ -8,8 +8,8 @@
 
 點擊下方按鈕，即可將本專案免費複製並託管至您的 Vercel 或 Netlify 帳號中（完全免費且內建 HTTPS）：
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/YOUR_GITHUB_USERNAME/screen-pusher)
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/YOUR_GITHUB_USERNAME/screen-pusher)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/huahua718-creator/screen-remote)
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/huahua718-creator/screen-remote)
 
 ---
 

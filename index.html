@@ -4,20 +4,49 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>班務大屏傳屏助手</title>
+  <!-- 如果有申請 Google AdSense，可在 <head> 引入 AdSense 腳本： -->
+  <!-- <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXXXXXXXXXXXXXX" crossorigin="anonymous"></script> -->
   <style>
-    body { font-family: sans-serif; background: #f2f2f7; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-    .card { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 90%; }
+    body { font-family: sans-serif; background: #f2f2f7; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    .card { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; max-width: 400px; width: 100%; }
     .btn { display: block; width: 100%; padding: 14px; margin: 10px 0; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 1.1rem; box-sizing: border-box; }
     .btn-screen { background: #007aff; color: white; }
     .btn-mobile { background: #34c759; color: white; }
+    
+    /* 廣告容器樣式 */
+    .ad-container { margin-top: 20px; width: 100%; max-width: 400px; text-align: center; }
+    .custom-ad-banner { background: #fff3cd; border: 1px solid #ffeeba; color: #856404; padding: 12px; border-radius: 10px; text-decoration: none; display: block; font-size: 0.85rem; font-weight: bold; }
   </style>
 </head>
 <body>
+
   <div class="card">
     <h2>🖥️ 班務大屏傳屏助手</h2>
     <p style="color:#666; font-size:0.9rem; margin-bottom: 20px;">請選擇您當前要開啟的裝置角色：</p>
     <a href="screen.html" class="btn btn-screen">📺 開啟【大屏接收端】</a>
     <a href="mobile.html" class="btn btn-mobile">📱 開啟【手機遙控器】</a>
   </div>
+
+  <!-- 🌟 廣告區塊範例 -->
+  <div class="ad-container">
+    <!-- 方式 A：自訂宣傳文字 / 贊助連結 -->
+    <a href="https://your-sponsor-link.com" target="_blank" class="custom-ad-banner">
+      ☕ 覺得好用嗎？歡迎點此贊助作者一杯咖啡！
+    </a>
+
+    <!-- 方式 B：Google AdSense 區塊（請替換為您的 slot ID） -->
+    <!--
+    <ins class="adsbygoogle"
+         style="display:block"
+         data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+         data-ad-slot="1234567890"
+         data-ad-format="auto"
+         data-full-width-responsive="true"></ins>
+    <script>
+         (adsbygoogle = window.adsbygoogle || []).push({});
+    </script>
+    -->
+  </div>
+
 </body>
 </html>

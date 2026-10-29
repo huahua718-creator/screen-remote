@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>大屏多功能接收端</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body, html { width: 100%; height: 100%; overflow: hidden; font-family: sans-serif; background: #000; color: #fff; position: relative; }
+    
+    #qrcode-view { display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center; }
+    .pin-code { font-size: 4rem; font-weight: bold; color: #4dabf7; letter-spacing: 5px; margin: 10px 0; }
+    #qrcode { background: #fff; padding: 15px; border-radius: 12px; margin: 15px 0; }
+    
+    #iframe-view, #media-viewport, #video-container { 
+      display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; border: none; background: #000; z-index: 10;
+    }
+
+    #media-viewport { overflow: hidden; touch-action: none; }
+    #zoom-layer {
+      width: 100vw; height: 100vh; position: absolute; top: 0; left: 0;
+      display: flex; justify-content: center; align-items: center;
+      transform-origin: center center; will-change: transform;
+    }
+
+    #photo-view { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; }
+    #annotation-canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: auto; cursor: crosshair; }
+
+    #remote-video { width: 100%; height: 100%; object-fit: contain; }
+    .live-badge { position: absolute; top: 20px; left: 20px; background: rgba(255, 59, 48, 0.9); color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.9rem; z-index: 20; }
+    
+    #reset-btn { position: fixed; bottom: 20px; right: 20px; z-index: 999; background: rgba(0,0,0,0.8); color: white; border: 1px solid #555; padding: 10px 20px; border-radius: 20px; cursor: pointer; display: none; }
+
+    #screen-pager-bar {
+      display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.85); padding: 8px 18px; border-radius: 30px; z-index: 1000;
+      align-items: center; gap: 14px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2);
+    }
+    .screen-pager-btn { background: #007aff; color: white; border: none; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 0.9rem; cursor: pointer; }
+
+    #screen-draw-toolbar {
+      display: none; position: fixed; top: 20px; right: 20px; background: rgba(0,0,0,0.85);
+      padding: 8px 14px; border-radius: 30px; z-index: 1000; align-items: center; gap: 8px;
+      backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2);
+    }
+    .screen-color-btn { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+    .screen-tool-btn { padding: 5px 12px; border-radius: 15px; border: none; background: #555; color: white; font-size: 0.85rem; font-weight: bold; cursor: pointer; }
+    .screen-tool-btn.active { background: #ff9500; }
+    .toolbar-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.3); margin: 0 2px; }
+  </style>
+</head>
+<body>
+
+  <div id="qrcode-view">
+    <h2>班務大屏傳屏助手</h2>
+    <p style="color: #aaa; margin-top: 5px;">大屏連線配對碼</p>
+    <div class="pin-code" id="pin-display">------</div>
+    <div id="qrcode"></div>
+    <p>請用手機掃描 QR Code 進行【網址推送 / 影片 / 照片 / PDF / 鏡頭 / 標註】</p>
+  </div>
+
+  <iframe id="iframe-view" src="about:blank"></iframe>
+
+  <div id="media-viewport">
+    <div id="zoom-layer">
+      <img id="photo-view" src="" alt="推送的照片/PDF">
+      <canvas id="annotation-canvas"></canvas>
+    </div>
+  </div>
+
+  <div id="video-container">
+    <div class="live-badge" id="stream-type-tag">🔴 實況傳輸中</div>
+    <video id="remote-video" autoplay playsinline controls></video>
+  </div>
+
+  <div id="screen-pager-bar">
+    <button class="screen-pager-btn" onclick="changeScreenPage(-1)">◄ 上一張/頁</button>
+    <span id="screen-page-indicator" style="color:white; font-weight:bold; font-size:1rem; min-width:90px; text-align:center;">1 / 1</span>
+    <button class="screen-pager-btn" onclick="changeScreenPage(1)">下一張/頁 ►</button>
+  </div>
+
+  <div id="screen-draw-toolbar">
+    <button class="screen-tool-btn" id="screen-pan-btn" onclick="togglePanMode()" title="切換移動/標註模式">🖐️ 移動</button>
+    <button class="screen-tool-btn" onclick="zoomIn()" title="放大">🔍+</button>
+    <button class="screen-tool-btn" onclick="zoomOut()" title="縮小">🔍-</button>
+    <button class="screen-tool-btn" onclick="resetZoom()" title="重設畫面">🔄</button>
+    <div class="toolbar-divider"></div>
+    <div class="screen-color-btn" style="background:#ff3b30;" onclick="setScreenPen('#ff3b30')"></div>
+    <div class="screen-color-btn" style="background:#ffcc00;" onclick="setScreenPen('#ffcc00')"></div>
+    <div class="screen-color-btn" style="background:#34c759;" onclick="setScreenPen('#34c759')"></div>
+    <div class="screen-color-btn" style="background:#007aff;" onclick="setScreenPen('#007aff')"></div>
+    <div class="screen-color-btn" style="background:#ffffff;" onclick="setScreenPen('#ffffff')"></div>
+    <button class="screen-tool-btn" id="screen-eraser-btn" onclick="toggleScreenEraser()">🧹 橡皮擦</button>
+    <button class="screen-tool-btn" style="background:#ff3b30;" onclick="clearScreenCanvas()">🗑️ 清除筆跡</button>
+  </div>
+
+  <button id="reset-btn" onclick="resetScreen()">結束並返回待機</button>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getDatabase, ref, onValue, set, push, onChildAdded, remove, off, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+    
+    // 🌟 直接引入獨立設定檔
+    import { firebaseConfig } from "./firebase-config.js";
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    const urlParams = new URLSearchParams(window.location.search);
+    let screenId = urlParams.get('id') || Math.floor(100000 + Math.random() * 900000).toString();
+    window.history.replaceState(null, '', `?id=${screenId}`);
+
+    document.getElementById('pin-display').innerText = screenId;
+    const mobileUrl = `${window.location.origin}/mobile.html?id=${screenId}`;
+    new QRCode(document.getElementById("qrcode"), { text: mobileUrl, width: 200, height: 200 });
+
+    const canvas = document.getElementById('annotation-canvas');
+    const ctx = canvas.getContext('2d');
+    function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    const screenRef = ref(db, 'screens/' + screenId);
+    let peerConnection = null;
+    let callerCandidatesRef = null;
+    let currentOfferSdp = null;
+    let iceCandidateQueue = [];
+
+    let currentPhotoIndex = 1;
+    let currentPhotoTotal = 1;
+
+    let scale = 1, translateX = 0, translateY = 0;
+    let activeMode = 'draw';
+    let isScreenDrawing = false, screenLastX = 0, screenLastY = 0;
+    let isPanning = false, panStartX = 0, panStartY = 0;
+    let initialPinchDist = null, initialScale = 1;
+    let screenColor = '#ff3b30', isScreenEraserMode = false;
+
+    const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    function formatEmbedUrl(url) {
+      if (!url) return url;
+      const ytMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/))([\w-]{11})/);
+      if (ytMatch && ytMatch[1]) return `https://www.youtube.com/embed/${ytMatch[1]}?autoplay=1`;
+      return url;
+    }
+
+    function updateTransform() {
+      const zoomLayer = document.getElementById('zoom-layer');
+      if (zoomLayer) {
+        zoomLayer.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+      }
+    }
+
+    window.resetZoom = function() { scale = 1; translateX = 0; translateY = 0; updateTransform(); };
+    window.zoomIn = function() { scale = Math.min(scale * 1.25, 8); updateTransform(); };
+    window.zoomOut = function() { scale = Math.max(scale / 1.25, 1); if (scale === 1) { translateX = 0; translateY = 0; } updateTransform(); };
+
+    window.togglePanMode = function() {
+      activeMode = activeMode === 'draw' ? 'pan' : 'draw';
+      const btn = document.getElementById('screen-pan-btn');
+      if (btn) btn.classList.toggle('active', activeMode === 'pan');
+      canvas.style.cursor = activeMode === 'pan' ? 'grab' : 'crosshair';
+    };
+
+    onValue(screenRef, async (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+
+      if (data.mode === 'url' && data.url) {
+        currentOfferSdp = null;
+        closeWebRTC(); showView('iframe');
+        document.getElementById('iframe-view').src = formatEmbedUrl(data.url);
+        document.getElementById('screen-draw-toolbar').style.display = 'flex';
+        document.getElementById('screen-pager-bar').style.display = 'none';
+
+      } else if (data.mode === 'photo' && data.photoUrl) {
+        currentOfferSdp = null;
+        closeWebRTC(); showView('photo');
+        document.getElementById('photo-view').src = data.photoUrl;
+        resetZoom();
+
+        currentPhotoIndex = data.photoIndex || 1;
+        currentPhotoTotal = data.photoTotal || 1;
+        const subType = data.mediaSubtype === 'pdf' ? '頁' : '張';
+
+        if (currentPhotoTotal > 1) {
+          document.getElementById('screen-pager-bar').style.display = 'flex';
+          document.getElementById('screen-page-indicator').innerText = `第 ${currentPhotoIndex} / ${currentPhotoTotal} ${subType}`;
+        } else {
+          document.getElementById('screen-pager-bar').style.display = 'none';
+        }
+        document.getElementById('screen-draw-toolbar').style.display = 'flex';
+
+      } else if (data.mode === 'webrtc' && data.offer) {
+        showView('video');
+        const tag = document.getElementById('stream-type-tag');
+        if (data.mediaType === 'mic') tag.innerText = '🎙️ 無線麥克風廣播中';
+        else if (data.mediaType.startsWith('video-file')) tag.innerText = '🎬 手機影片播放中';
+        else tag.innerText = '🎥 無線實物鏡頭中';
+        
+        document.getElementById('screen-pager-bar').style.display = 'none';
+        document.getElementById('screen-draw-toolbar').style.display = 'flex';
+
+        if (data.offer.sdp !== currentOfferSdp) {
+          currentOfferSdp = data.offer.sdp;
+          closeWebRTC();
+          await handleWebRTCOffer(data.offer, data.mediaType);
+        }
+
+      } else if (data.mode === 'idle') {
+        currentOfferSdp = null;
+        resetUI();
+      }
+    });
+
+    window.changeScreenPage = function(delta) {
+      const target = currentPhotoIndex + delta;
+      if (target >= 1 && target <= currentPhotoTotal) {
+        update(screenRef, { requestPage: target });
+      }
+    };
+
+    const drawEventsRef = ref(db, `screens/${screenId}/drawEvents`);
+    onChildAdded(drawEventsRef, (snapshot) => {
+      const d = snapshot.val();
+      if (d) {
+        ctx.beginPath();
+        ctx.moveTo(d.x0 * canvas.width, d.y0 * canvas.height);
+        ctx.lineTo(d.x1 * canvas.width, d.y1 * canvas.height);
+        if (d.isEraser) {
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.lineWidth = d.size || 20;
+        } else {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.strokeStyle = d.color;
+          ctx.lineWidth = d.size || 4;
+        }
+        ctx.lineCap = 'round'; ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    });
+
+    onValue(drawEventsRef, (snapshot) => {
+      if (!snapshot.exists()) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+
+    window.setScreenPen = function(color) {
+      isScreenEraserMode = false;
+      screenColor = color;
+      document.getElementById('screen-eraser-btn').classList.remove('active');
+    };
+
+    window.toggleScreenEraser = function() {
+      isScreenEraserMode = !isScreenEraserMode;
+      document.getElementById('screen-eraser-btn').classList.toggle('active', isScreenEraserMode);
+    };
+
+    window.clearScreenCanvas = function() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      remove(ref(db, `screens/${screenId}/drawEvents`));
+    };
+
+    function getLayerCoords(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const screenX = clientX - rect.left;
+      const screenY = clientY - rect.top;
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      return {
+        x: cx + (screenX - cx - translateX) / scale,
+        y: cy + (screenY - cy - translateY) / scale
+      };
+    }
+
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+      const newScale = Math.min(Math.max(1, scale * zoomFactor), 8);
+      if (newScale === 1) { translateX = 0; translateY = 0; }
+      scale = newScale;
+      updateTransform();
+    }, { passive: false });
+
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+    function handleScreenStart(e) {
+      if (document.getElementById('qrcode-view').style.display !== 'none') return;
+
+      if (e.touches && e.touches.length === 2) {
+        isPanning = true;
+        isScreenDrawing = false;
+        panStartX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - translateX;
+        panStartY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - translateY;
+        initialPinchDist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        initialScale = scale;
+        return;
+      }
+
+      if (activeMode === 'pan' || e.button === 1 || e.button === 2) {
+        isPanning = true;
+        isScreenDrawing = false;
+        const touch = e.touches ? e.touches[0] : e;
+        panStartX = touch.clientX - translateX;
+        panStartY = touch.clientY - translateY;
+        canvas.style.cursor = 'grabbing';
+      } else {
+        isScreenDrawing = true;
+        isPanning = false;
+        const touch = e.touches ? e.touches[0] : e;
+        const coords = getLayerCoords(touch.clientX, touch.clientY);
+        screenLastX = coords.x; screenLastY = coords.y;
+      }
+    }
+
+    function handleScreenMove(e) {
+      if (isPanning) {
+        if (e.touches && e.touches.length === 2) {
+          const currentDist = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          if (initialPinchDist) {
+            scale = Math.min(Math.max(1, initialScale * (currentDist / initialPinchDist)), 8);
+          }
+          const currentMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+          const currentMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+          translateX = currentMidX - panStartX;
+          translateY = currentMidY - panStartY;
+          updateTransform();
+        } else {
+          const touch = e.touches ? e.touches[0] : e;
+          translateX = touch.clientX - panStartX;
+          translateY = touch.clientY - panStartY;
+          updateTransform();
+        }
+        return;
+      }
+
+      if (!isScreenDrawing) return;
+      const touch = e.touches ? e.touches[0] : e;
+      const coords = getLayerCoords(touch.clientX, touch.clientY);
+
+      push(ref(db, `screens/${screenId}/drawEvents`), {
+        x0: screenLastX / canvas.width, y0: screenLastY / canvas.height,
+        x1: coords.x / canvas.width, y1: coords.y / canvas.height,
+        color: screenColor,
+        size: isScreenEraserMode ? 20 : 4,
+        isEraser: isScreenEraserMode
+      });
+
+      screenLastX = coords.x; screenLastY = coords.y;
+    }
+
+    function handleScreenEnd() {
+      isScreenDrawing = false; isPanning = false; initialPinchDist = null;
+      canvas.style.cursor = activeMode === 'pan' ? 'grab' : 'crosshair';
+    }
+
+    canvas.addEventListener('mousedown', handleScreenStart);
+    canvas.addEventListener('mousemove', handleScreenMove);
+    canvas.addEventListener('mouseup', handleScreenEnd);
+    canvas.addEventListener('touchstart', handleScreenStart);
+    canvas.addEventListener('touchmove', handleScreenMove);
+    canvas.addEventListener('touchend', handleScreenEnd);
+
+    async function handleWebRTCOffer(offer, mediaType) {
+      peerConnection = new RTCPeerConnection(rtcConfig);
+      iceCandidateQueue = [];
+      
+      peerConnection.ontrack = (event) => {
+        const remoteVideo = document.getElementById('remote-video');
+        if (remoteVideo.srcObject !== event.streams[0]) {
+          remoteVideo.srcObject = event.streams[0];
+          remoteVideo.muted = (mediaType === 'camera');
+          remoteVideo.play().catch(err => console.warn("播放中:", err));
+        }
+      };
+
+      peerConnection.ondatachannel = (event) => {
+        const receiveChannel = event.channel;
+        let fileChunks = [];
+        let fileHeader = null;
+        let receivedSize = 0;
+
+        receiveChannel.binaryType = 'arraybuffer';
+        receiveChannel.onmessage = (e) => {
+          if (typeof e.data === 'string') {
+            const data = JSON.parse(e.data);
+            if (data.type === 'header') { fileHeader = data; fileChunks = []; receivedSize = 0; }
+          } else {
+            fileChunks.push(e.data);
+            receivedSize += e.data.byteLength;
+            if (fileHeader && receivedSize >= fileHeader.size) {
+              const blob = new Blob(fileChunks, { type: fileHeader.mime });
+              const videoUrl = URL.createObjectURL(blob);
+              const remoteVideo = document.getElementById('remote-video');
+              remoteVideo.srcObject = null;
+              remoteVideo.src = videoUrl;
+              remoteVideo.muted = false;
+              remoteVideo.play().catch(err => console.warn("影片播放限制:", err));
+            }
+          }
+        };
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) push(ref(db, `screens/${screenId}/calleeCandidates`), event.candidate.toJSON());
+      };
+
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+      while (iceCandidateQueue.length > 0) {
+        const cand = iceCandidateQueue.shift();
+        await peerConnection.addIceCandidate(cand).catch(e => console.error(e));
+      }
+
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      await update(ref(db, `screens/${screenId}`), { answer: { type: answer.type, sdp: answer.sdp } });
+
+      callerCandidatesRef = ref(db, `screens/${screenId}/callerCandidates`);
+      onChildAdded(callerCandidatesRef, (snapshot) => {
+        if (snapshot.val()) {
+          const candidate = new RTCIceCandidate(snapshot.val());
+          if (peerConnection && peerConnection.remoteDescription) {
+            peerConnection.addIceCandidate(candidate).catch(e => console.error(e));
+          } else {
+            iceCandidateQueue.push(candidate);
+          }
+        }
+      });
+    }
+
+    function closeWebRTC() {
+      if (callerCandidatesRef) { off(callerCandidatesRef); callerCandidatesRef = null; }
+      if (peerConnection) { peerConnection.close(); peerConnection = null; }
+      iceCandidateQueue = [];
+      const remoteVideo = document.getElementById('remote-video');
+      if (remoteVideo.srcObject) {
+        remoteVideo.srcObject.getTracks().forEach(track => track.stop());
+        remoteVideo.srcObject = null;
+      }
+      if (remoteVideo.src) {
+        remoteVideo.removeAttribute('src');
+        remoteVideo.load();
+      }
+    }
+
+    function showView(type) {
+      document.getElementById('qrcode-view').style.display = 'none';
+      document.getElementById('iframe-view').style.display = type === 'iframe' ? 'block' : 'none';
+      document.getElementById('media-viewport').style.display = type === 'photo' ? 'block' : 'none';
+      document.getElementById('video-container').style.display = type === 'video' ? 'block' : 'none';
+      document.getElementById('reset-btn').style.display = 'block';
+    }
+
+    function resetUI() {
+      closeWebRTC(); currentOfferSdp = null; resetZoom();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      document.getElementById('iframe-view').src = "about:blank";
+      document.getElementById('photo-view').src = "";
+      document.getElementById('iframe-view').style.display = 'none';
+      document.getElementById('media-viewport').style.display = 'none';
+      document.getElementById('video-container').style.display = 'none';
+      document.getElementById('screen-pager-bar').style.display = 'none';
+      document.getElementById('screen-draw-toolbar').style.display = 'none';
+      document.getElementById('qrcode-view').style.display = 'flex';
+      document.getElementById('reset-btn').style.display = 'none';
+    }
+
+    window.resetScreen = function() { remove(screenRef); set(screenRef, { mode: 'idle' }); resetUI(); };
+  </script>
+</body>
+</html>
