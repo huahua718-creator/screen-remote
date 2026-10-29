@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>傳屏遙控器</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 12px; background: #f2f2f7; color: #333; margin: 0; }
+    .card { background: white; padding: 16px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 12px; }
+    label { font-size: 0.85rem; color: #666; font-weight: bold; display: block; margin-bottom: 6px; }
+    input, select { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; margin-bottom: 10px; box-sizing: border-box; font-size: 1rem; }
+    
+    .nav-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+    .tab-btn { flex: 1; padding: 10px 2px; font-size: 0.8rem; border: none; background: #e5e5ea; border-radius: 8px; font-weight: bold; cursor: pointer; }
+    .tab-btn.active { background: #007aff; color: white; }
+    
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    
+    button.action-btn { width: 100%; padding: 12px; background: #007aff; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: bold; cursor: pointer; margin-top: 5px; }
+    button.push-btn { background: #34c759; }
+    button.stop-btn { background: #ff3b30; }
+
+    #draw-pad { 
+      width: 100%; height: 320px; background-color: #1c1c1e; background-size: contain; 
+      background-repeat: no-repeat; background-position: center; border-radius: 8px; 
+      touch-action: none; cursor: crosshair; border: 1px solid #ddd;
+    }
+    
+    .tool-bar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+    .color-btn { width: 30px; height: 30px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.2); }
+    .tool-btn { padding: 6px 12px; border-radius: 20px; border: 1px solid #ccc; background: #f0f0f5; font-size: 0.85rem; font-weight: bold; cursor: pointer; }
+    .tool-btn.active { background: #ff9500; color: white; border-color: #ff9500; }
+
+    #camera-fullscreen-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; z-index: 9999; }
+    #local-preview { width: 100%; height: 100%; object-fit: cover; }
+    #live-draw-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; touch-action: none; pointer-events: none; }
+    
+    .floating-bar { 
+      position: absolute; top: 20px; left: 50%; transform: translateX(-50%); 
+      display: flex; gap: 12px; background: rgba(0,0,0,0.75); padding: 8px 16px; 
+      border-radius: 30px; backdrop-filter: blur(10px); z-index: 10001;
+    }
+    .float-btn { border: none; padding: 8px 16px; border-radius: 20px; font-size: 1.3rem; font-weight: bold; color: white; cursor: pointer; }
+
+    #progress-container { display: none; margin-top: 10px; background: #e5e5ea; border-radius: 8px; overflow: hidden; height: 12px; }
+    #progress-bar { width: 0%; height: 100%; background: #34c759; transition: width 0.1s; }
+
+    /* 翻頁控制列樣式 */
+    .nav-pager-box { display: none; margin-bottom: 8px; padding: 8px; background: #e5e5ea; border-radius: 8px; text-align: center; }
+    .nav-pager-btn { padding: 6px 16px; border-radius: 6px; border: none; background: #007aff; color: white; font-weight: bold; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+  <div style="padding: 5px;">
+    <div class="card">
+      <label for="room-input">大屏房間碼 (PIN)：</label>
+      <input type="text" id="room-input" placeholder="例如：839201" onchange="listenToPageRequests()">
+    </div>
+
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchTab('url-tab', this)">網址推送</button>
+      <button class="tab-btn" id="cam-tab-btn" onclick="switchTab('camera-tab', this)">媒體與鏡頭</button>
+      <button class="tab-btn" id="draw-tab-btn" onclick="switchTab('draw-tab', this)">畫筆標註</button>
+      <button class="tab-btn" onclick="switchTab('mic-tab', this)">麥克風</button>
+    </div>
+
+    <!-- 1. 網址推送頁籤 -->
+    <div id="url-tab" class="tab-content active card">
+      <label for="url-input">貼上網址或 YouTube 連結：</label>
+      <input type="url" id="url-input" placeholder="example.com 或 https://example.com">
+
+      <label for="url-name-input">網址自訂名稱（選填）：</label>
+      <input type="text" id="url-name-input" placeholder="例如：英語課影片 / 課表">
+
+      <label for="history-select">歷史推送紀錄：</label>
+      <select id="history-select" onchange="selectHistory(this.value)">
+        <option value="">-- 點擊選擇過往歷史網址 --</option>
+      </select>
+
+      <button class="action-btn" onclick="sendUrl()">推送至大屏</button>
+      <button style="width:100%; background:none; border:none; color:#8e8e93; font-size:0.75rem; margin-top:8px; cursor:pointer;" onclick="clearHistory()">清空歷史紀錄</button>
+    </div>
+
+    <!-- 2. 媒體與鏡頭頁籤 -->
+    <div id="camera-tab" class="tab-content card">
+      <label>媒體推送方式：</label>
+
+      <button class="action-btn" style="background: #5856d6; margin-bottom: 8px;" onclick="document.getElementById('gallery-input').click()">🖼️ 選擇照片（可複選多張相片）</button>
+      <input type="file" id="gallery-input" accept="image/*" multiple style="display:none;" onchange="handleGallerySelect(event)">
+
+      <button class="action-btn" style="background: #e0245e; margin-bottom: 8px; margin-top: 8px;" onclick="document.getElementById('pdf-input').click()">📄 選擇 PDF 文件推送到大屏</button>
+      <input type="file" id="pdf-input" accept="application/pdf" style="display:none;" onchange="handlePdfSelect(event)">
+
+      <button class="action-btn" style="background: #ff9500; margin-bottom: 8px; margin-top: 8px;" onclick="document.getElementById('video-file-input').click()">🎬 選擇手機影片檔推送到大屏</button>
+      <input type="file" id="video-file-input" accept="video/*" style="display:none;" onchange="handleVideoFileSelect(event)">
+      
+      <div id="progress-container"><div id="progress-bar"></div></div>
+      <p id="upload-status" style="font-size:0.8rem; color:#007aff; text-align:center; display:none; margin-top:4px;"></p>
+
+      <p style="font-size: 0.8rem; color: #8e8e93; text-align: center; margin: 10px 0;">— 或 —</p>
+
+      <button id="cam-start-btn" class="action-btn push-btn" onclick="startWebRTC('camera')">🎥 開啟手機全螢幕實時鏡頭</button>
+    </div>
+
+    <!-- 3. 畫筆標註頁籤 (🌟 已將照片/PDF 翻頁按鈕改移至此處) -->
+    <div id="draw-tab" class="tab-content card">
+      <label id="draw-status-label">在畫布上手指滑動標註，大屏同步繪製：</label>
+
+      <!-- 🌟 相片翻頁列 -->
+      <div id="photo-pager" class="nav-pager-box">
+        <button class="nav-pager-btn" onclick="prevPhoto()">◄ 上一張</button>
+        <span id="photo-indicator" style="margin: 0 10px; font-weight:bold; font-size:0.9rem;">1 / 1</span>
+        <button class="nav-pager-btn" onclick="nextPhoto()">下一張 ►</button>
+      </div>
+
+      <!-- 🌟 PDF 頁數翻頁列 -->
+      <div id="pdf-pager" class="nav-pager-box">
+        <button class="nav-pager-btn" onclick="prevPdfPage()">◄ 上一頁</button>
+        <span id="pdf-indicator" style="margin: 0 10px; font-weight:bold; font-size:0.9rem;">第 1 / 1 頁</span>
+        <button class="nav-pager-btn" onclick="nextPdfPage()">下一頁 ►</button>
+      </div>
+
+      <canvas id="draw-pad"></canvas>
+      
+      <div class="tool-bar">
+        <div class="color-btn" style="background:#ff3b30;" onclick="selectPen('#ff3b30')"></div>
+        <div class="color-btn" style="background:#ffcc00;" onclick="selectPen('#ffcc00')"></div>
+        <div class="color-btn" style="background:#34c759;" onclick="selectPen('#34c759')"></div>
+        <div class="color-btn" style="background:#007aff;" onclick="selectPen('#007aff')"></div>
+        <div class="color-btn" style="background:#ffffff;" onclick="selectPen('#ffffff')"></div>
+        <button class="tool-btn" id="eraser-btn" onclick="toggleEraser()">🧹 橡皮擦</button>
+      </div>
+
+      <div style="display: flex; gap: 8px;">
+        <button class="action-btn stop-btn" style="flex: 1;" onclick="clearCanvas()">🧹 清除畫筆筆蹟</button>
+        <button class="action-btn" style="flex: 1; background:#8e8e93;" onclick="clearPhotoBackground()">🖼️ 移除背景照片</button>
+      </div>
+    </div>
+
+    <!-- 4. 無線麥克風頁籤 -->
+    <div id="mic-tab" class="tab-content card">
+      <p style="font-size: 0.85rem; color: #666; margin-bottom: 10px;">聲音由大屏喇叭即時播報</p>
+      <button id="mic-start-btn" class="action-btn" onclick="startWebRTC('mic')">開啟無線麥克風</button>
+      <button id="mic-stop-btn" class="action-btn stop-btn" style="display:none;" onclick="stopWebRTC()">關閉麥克風</button>
+    </div>
+  </div>
+
+  <div id="camera-fullscreen-overlay">
+    <video id="local-preview" autoplay playsinline muted></video>
+    <canvas id="live-draw-canvas"></canvas>
+
+    <div class="floating-bar">
+      <button class="float-btn" style="background:#34c759;" onclick="pushSnapshotToScreen()" title="拍照推送">📷</button>
+      <button class="float-btn" id="live-draw-btn" style="background:#007aff;" onclick="toggleLiveDraw()" title="畫筆標註">✏️</button>
+      <button class="float-btn" style="background:#ff3b30;" onclick="stopWebRTC()" title="關閉鏡頭">❌</button>
+    </div>
+
+    <div id="live-color-bar" class="tool-bar" style="display:none; position:absolute; top:75px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.75); padding:8px 15px; border-radius:25px; z-index:10001;">
+      <div class="color-btn" style="background:#ff3b30;" onclick="selectPen('#ff3b30')"></div>
+      <div class="color-btn" style="background:#ffcc00;" onclick="selectPen('#ffcc00')"></div>
+      <div class="color-btn" style="background:#34c759;" onclick="selectPen('#34c759')"></div>
+      <div class="color-btn" style="background:#007aff;" onclick="selectPen('#007aff')"></div>
+      <div class="color-btn" style="background:#ffffff;" onclick="selectPen('#ffffff')"></div>
+      <button class="tool-btn" id="live-eraser-btn" onclick="toggleEraser()">🧹 橡皮擦</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, push, onChildAdded, remove, off, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBWa8b0rQl-qj-IWjP5hZntEi4ud_cOeVA",
+      authDomain: "screen-pusher.firebaseapp.com",
+      databaseURL: "https://screen-pusher-default-rtdb.asia-southeast1.firebasedatabase.app/",
+      projectId: "screen-pusher"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    const urlParams = new URLSearchParams(window.location.search);
+    document.getElementById('room-input').value = urlParams.get('id') || '';
+
+    let localStream = null;
+    let peerConnection = null;
+    let dataChannel = null;
+    let calleeCandidatesRef = null;
+    let answerRef = null;
+    let requestPageRef = null;
+    let iceCandidateQueue = [];
+    let isLiveDrawing = false;
+    let isEraserMode = false;
+    let currentColor = '#ff3b30';
+
+    let photoList = [];
+    let currentPhotoIndex = 0;
+    let pdfDoc = null;
+    let currentPdfPage = 1;
+    let currentMediaSubtype = 'photo';
+
+    const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    document.addEventListener('DOMContentLoaded', () => { loadHistory(); listenToPageRequests(); });
+
+    // 監聽大屏傳來的翻頁要求
+    window.listenToPageRequests = function() {
+      const screenId = getScreenId(); if (!screenId) return;
+      if (requestPageRef) off(requestPageRef);
+      
+      requestPageRef = ref(db, `screens/${screenId}/requestPage`);
+      onValue(requestPageRef, (snap) => {
+        const reqPage = snap.val();
+        if (reqPage) {
+          if (currentMediaSubtype === 'photo' && reqPage !== currentPhotoIndex + 1 && photoList.length > 0) {
+            sendPhotoIndex(reqPage - 1);
+          } else if (currentMediaSubtype === 'pdf' && reqPage !== currentPdfPage && pdfDoc) {
+            currentPdfPage = reqPage;
+            renderAndSendPdfPage(currentPdfPage);
+          }
+        }
+      });
+    };
+
+    function switchTab(tabId, btn) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(tabId).classList.add('active');
+      if (tabId === 'draw-tab') resizeDrawPad();
+    }
+    window.switchTab = switchTab;
+
+    function loadHistory() {
+      const history = JSON.parse(localStorage.getItem('pushedUrlHistory') || '[]');
+      const select = document.getElementById('history-select');
+      if (!select) return;
+      select.innerHTML = '<option value="">-- 點擊選擇過往歷史網址 --</option>';
+      history.forEach(item => {
+        const opt = document.createElement('option');
+        const url = typeof item === 'object' ? item.url : item;
+        const name = (typeof item === 'object' && item.name) ? item.name : url;
+        opt.value = url;
+        opt.dataset.name = (typeof item === 'object' && item.name) ? item.name : '';
+        opt.textContent = name.length > 30 ? name.substring(0, 27) + '...' : name;
+        select.appendChild(opt);
+      });
+    }
+
+    function saveToHistory(url, name) {
+      if (!url) return;
+      let history = JSON.parse(localStorage.getItem('pushedUrlHistory') || '[]');
+      history = history.filter(item => (typeof item === 'object' ? item.url : item) !== url);
+      history.unshift({ url: url, name: name || '' });
+      if (history.length > 10) history = history.slice(0, 10);
+      localStorage.setItem('pushedUrlHistory', JSON.stringify(history));
+      loadHistory();
+    }
+
+    window.selectHistory = function(url) {
+      if (url) {
+        document.getElementById('url-input').value = url;
+        const select = document.getElementById('history-select');
+        const selectedOpt = select.options[select.selectedIndex];
+        document.getElementById('url-name-input').value = (selectedOpt && selectedOpt.dataset.name) ? selectedOpt.dataset.name : '';
+      }
+    };
+
+    window.clearHistory = function() {
+      if (confirm('確定要清空手機儲存的歷史網址紀錄嗎？')) {
+        localStorage.removeItem('pushedUrlHistory');
+        document.getElementById('url-name-input').value = '';
+        document.getElementById('url-input').value = '';
+        loadHistory();
+      }
+    };
+
+    window.sendUrl = function() {
+      const screenId = getScreenId(); if (!screenId) return;
+      stopWebRTC();
+      let url = document.getElementById('url-input').value.trim();
+      const name = document.getElementById('url-name-input').value.trim();
+      if (url) {
+        if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
+        saveToHistory(url, name);
+      }
+      set(ref(db, 'screens/' + screenId), { mode: 'url', url: url, updatedAt: Date.now() });
+    };
+
+    // 多圖選取
+    window.handleGallerySelect = async function(e) {
+      const files = Array.from(e.target.files);
+      if (files.length === 0) return;
+
+      currentMediaSubtype = 'photo';
+      photoList = [];
+      currentPhotoIndex = 0;
+
+      for (const file of files) {
+        const dataUrl = await processImageFile(file);
+        photoList.push(dataUrl);
+      }
+
+      document.getElementById('pdf-pager').style.display = 'none';
+      document.getElementById('photo-pager').style.display = photoList.length > 1 ? 'block' : 'none';
+
+      sendPhotoIndex(0);
+    };
+
+    function processImageFile(file) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+          const img = new Image();
+          img.onload = function() {
+            const canvas = document.createElement('canvas');
+            let w = img.width, h = img.height, maxDim = 1280;
+            if (w > maxDim || h > maxDim) {
+              if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+              else { w = Math.round((w * maxDim) / h); h = maxDim; }
+            }
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', 0.75));
+          };
+          img.src = evt.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function sendPhotoIndex(index) {
+      if (index < 0 || index >= photoList.length) return;
+      currentPhotoIndex = index;
+      document.getElementById('photo-indicator').innerText = `${currentPhotoIndex + 1} / ${photoList.length}`;
+
+      const dataUrl = photoList[currentPhotoIndex];
+      stopWebRTC();
+      setPadBackground(dataUrl);
+
+      const screenId = getScreenId(); if (!screenId) return;
+      remove(ref(db, `screens/${screenId}/drawEvents`));
+      update(ref(db, 'screens/' + screenId), {
+        mode: 'photo',
+        photoUrl: dataUrl,
+        photoIndex: currentPhotoIndex + 1,
+        photoTotal: photoList.length,
+        mediaSubtype: 'photo',
+        requestPage: currentPhotoIndex + 1,
+        updatedAt: Date.now()
+      }).then(() => {
+        document.getElementById('draw-tab-btn').click();
+      });
+    }
+
+    window.prevPhoto = function() { sendPhotoIndex(currentPhotoIndex - 1); };
+    window.nextPhoto = function() { sendPhotoIndex(currentPhotoIndex + 1); };
+
+    // PDF 文件處理
+    window.handlePdfSelect = async function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      currentMediaSubtype = 'pdf';
+      document.getElementById('photo-pager').style.display = 'none';
+
+      const fileReader = new FileReader();
+      fileReader.onload = async function() {
+        const typedarray = new Uint8Array(this.result);
+        pdfDoc = await pdfjsLib.getDocument(typedarray).promise;
+        currentPdfPage = 1;
+        document.getElementById('pdf-pager').style.display = 'block';
+        renderAndSendPdfPage(currentPdfPage);
+      };
+      fileReader.readAsArrayBuffer(file);
+    };
+
+    async function renderAndSendPdfPage(pageNum) {
+      if (!pdfDoc) return;
+      const page = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+
+      document.getElementById('pdf-indicator').innerText = `第 ${pageNum} / ${pdfDoc.numPages} 頁`;
+
+      stopWebRTC();
+      setPadBackground(dataUrl);
+
+      const screenId = getScreenId(); if (!screenId) return;
+      remove(ref(db, `screens/${screenId}/drawEvents`));
+      update(ref(db, 'screens/' + screenId), {
+        mode: 'photo',
+        photoUrl: dataUrl,
+        photoIndex: pageNum,
+        photoTotal: pdfDoc.numPages,
+        mediaSubtype: 'pdf',
+        requestPage: pageNum,
+        updatedAt: Date.now()
+      }).then(() => {
+        document.getElementById('draw-tab-btn').click();
+      });
+    }
+
+    window.prevPdfPage = function() {
+      if (currentPdfPage > 1) {
+        currentPdfPage--;
+        renderAndSendPdfPage(currentPdfPage);
+      }
+    };
+
+    window.nextPdfPage = function() {
+      if (pdfDoc && currentPdfPage < pdfDoc.numPages) {
+        currentPdfPage++;
+        renderAndSendPdfPage(currentPdfPage);
+      }
+    };
+
+    function closePeerConnection() {
+      if (calleeCandidatesRef) { off(calleeCandidatesRef); calleeCandidatesRef = null; }
+      if (answerRef) { off(answerRef); answerRef = null; }
+      if (dataChannel) { dataChannel.close(); dataChannel = null; }
+      if (peerConnection) { peerConnection.close(); peerConnection = null; }
+      iceCandidateQueue = [];
+    }
+
+    // P2P 影片檔推送
+    window.handleVideoFileSelect = async function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const screenId = getScreenId(); if (!screenId) return;
+
+      closePeerConnection();
+      await remove(ref(db, 'screens/' + screenId));
+
+      const progressBar = document.getElementById('progress-bar');
+      const progressContainer = document.getElementById('progress-container');
+      const uploadStatus = document.getElementById('upload-status');
+      
+      progressContainer.style.display = 'block';
+      uploadStatus.style.display = 'block';
+      uploadStatus.innerText = '⚡ 正在建立 P2P 點對點連線...';
+      progressBar.style.width = '0%';
+
+      peerConnection = new RTCPeerConnection(rtcConfig);
+      dataChannel = peerConnection.createDataChannel('fileTransfer');
+      dataChannel.binaryType = 'arraybuffer';
+
+      dataChannel.onopen = async () => {
+        uploadStatus.innerText = '🚀 開始點對點傳輸影片檔...';
+        dataChannel.send(JSON.stringify({ type: 'header', size: file.size, mime: file.type || 'video/mp4' }));
+
+        const chunkSize = 64 * 1024;
+        let offset = 0;
+        const reader = new FileReader();
+
+        reader.onload = (event) => {
+          dataChannel.send(event.target.result);
+          offset += event.target.result.byteLength;
+          const percent = Math.round((offset / file.size) * 100);
+          progressBar.style.width = percent + '%';
+          uploadStatus.innerText = `🚀 點對點極速傳輸中：${percent}%`;
+
+          if (offset < file.size) {
+            if (dataChannel.bufferedAmount > 8 * 1024 * 1024) {
+              setTimeout(readNextChunk, 100);
+            } else {
+              readNextChunk();
+            }
+          } else {
+            uploadStatus.innerText = '✓ 影片已被大屏順利接收並開始播放！';
+          }
+        };
+
+        function readNextChunk() {
+          const slice = file.slice(offset, offset + chunkSize);
+          reader.readAsArrayBuffer(slice);
+        }
+
+        readNextChunk();
+      };
+
+      calleeCandidatesRef = ref(db, `screens/${screenId}/calleeCandidates`);
+      onChildAdded(calleeCandidatesRef, (snapshot) => {
+        if (snapshot.val()) {
+          const candidate = new RTCIceCandidate(snapshot.val());
+          if (peerConnection && peerConnection.remoteDescription) {
+            peerConnection.addIceCandidate(candidate).catch(e => console.error(e));
+          } else {
+            iceCandidateQueue.push(candidate);
+          }
+        }
+      });
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) push(ref(db, `screens/${screenId}/callerCandidates`), event.candidate.toJSON());
+      };
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      await update(ref(db, `screens/${screenId}`), {
+        mode: 'webrtc',
+        mediaType: 'video-file-datachannel',
+        offer: { type: offer.type, sdp: offer.sdp }
+      });
+
+      answerRef = ref(db, `screens/${screenId}/answer`);
+      onValue(answerRef, async (snap) => {
+        const ans = snap.val();
+        if (ans && peerConnection && peerConnection.signalingState !== 'stable') {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(ans)).catch(e => console.error(e));
+          while (iceCandidateQueue.length > 0) {
+            const cand = iceCandidateQueue.shift();
+            await peerConnection.addIceCandidate(cand).catch(e => console.error(e));
+          }
+        }
+      });
+    };
+
+    // 實體鏡頭
+    window.startWebRTC = async function(type) {
+      try {
+        const constraints = type === 'camera' 
+          ? { video: { facingMode: { ideal: "environment" } }, audio: false }
+          : { video: false, audio: true };
+
+        localStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+        if (type === 'camera') {
+          const preview = document.getElementById('local-preview');
+          preview.srcObject = localStream;
+          preview.play().catch(e => console.log("Safari 鏡頭預覽:", e));
+          document.getElementById('camera-fullscreen-overlay').style.display = 'block';
+          resizeLiveCanvas();
+        }
+
+        closePeerConnection();
+        const screenId = getScreenId(); if (!screenId) return;
+        await remove(ref(db, 'screens/' + screenId));
+
+        peerConnection = new RTCPeerConnection(rtcConfig);
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+        calleeCandidatesRef = ref(db, `screens/${screenId}/calleeCandidates`);
+        onChildAdded(calleeCandidatesRef, (snapshot) => {
+          if (snapshot.val()) {
+            const candidate = new RTCIceCandidate(snapshot.val());
+            if (peerConnection && peerConnection.remoteDescription) {
+              peerConnection.addIceCandidate(candidate).catch(e => console.error(e));
+            } else {
+              iceCandidateQueue.push(candidate);
+            }
+          }
+        });
+
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) push(ref(db, `screens/${screenId}/callerCandidates`), event.candidate.toJSON());
+        };
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+
+        await update(ref(db, `screens/${screenId}`), {
+          mode: 'webrtc',
+          mediaType: type,
+          offer: { type: offer.type, sdp: offer.sdp }
+        });
+
+        answerRef = ref(db, `screens/${screenId}/answer`);
+        onValue(answerRef, async (snap) => {
+          const ans = snap.val();
+          if (ans && peerConnection && peerConnection.signalingState !== 'stable') {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(ans)).catch(e => console.error(e));
+            while (iceCandidateQueue.length > 0) {
+              const cand = iceCandidateQueue.shift();
+              await peerConnection.addIceCandidate(cand).catch(e => console.error(e));
+            }
+          }
+        });
+
+        toggleMediaUI(type, true);
+      } catch (err) { alert('請確保已給予鏡頭/麥克風權限：' + err.message); }
+    };
+
+    window.stopWebRTC = function() {
+      closePeerConnection();
+
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+
+      document.getElementById('progress-container').style.display = 'none';
+      document.getElementById('upload-status').style.display = 'none';
+
+      document.getElementById('camera-fullscreen-overlay').style.display = 'none';
+      document.getElementById('live-color-bar').style.display = 'none';
+      isLiveDrawing = false;
+      document.getElementById('live-draw-canvas').style.pointerEvents = 'none';
+
+      toggleMediaUI('camera', false);
+      toggleMediaUI('mic', false);
+    };
+
+    window.pushSnapshotToScreen = function() {
+      const screenId = getScreenId(); if (!screenId) return;
+      const video = document.getElementById('local-preview');
+      if (!video || !video.srcObject) return;
+
+      const canvas = document.createElement('canvas');
+      let w = video.videoWidth || 1280, h = video.videoHeight || 720, maxDim = 1280;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+        else { w = Math.round((w * maxDim) / h); h = maxDim; }
+      }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+      
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+      stopWebRTC();
+      setPadBackground(dataUrl);
+
+      remove(ref(db, `screens/${screenId}/drawEvents`));
+      set(ref(db, 'screens/' + screenId), { mode: 'photo', photoUrl: dataUrl, updatedAt: Date.now() }).then(() => {
+        document.getElementById('draw-tab-btn').click();
+      });
+    };
+
+    function setPadBackground(url) {
+      const pad = document.getElementById('draw-pad');
+      if (url) {
+        pad.style.backgroundImage = `url(${url})`;
+        document.getElementById('draw-status-label').innerText = '📸 已載入內容，請直接在上方圈寫標註：';
+      } else {
+        pad.style.backgroundImage = 'none';
+        document.getElementById('draw-status-label').innerText = '在下方畫布上手指滑動，大屏同步繪製：';
+      }
+    }
+
+    window.clearPhotoBackground = function() { 
+      setPadBackground(null);
+      document.getElementById('photo-pager').style.display = 'none';
+      document.getElementById('pdf-pager').style.display = 'none';
+    };
+
+    window.toggleLiveDraw = function() {
+      isLiveDrawing = !isLiveDrawing;
+      const liveCanvas = document.getElementById('live-draw-canvas');
+      const liveBtn = document.getElementById('live-draw-btn');
+      const colorBar = document.getElementById('live-color-bar');
+
+      if (isLiveDrawing) {
+        liveCanvas.style.pointerEvents = 'auto';
+        liveBtn.style.background = '#ff9500';
+        colorBar.style.display = 'flex';
+      } else {
+        liveCanvas.style.pointerEvents = 'none';
+        liveBtn.style.background = '#007aff';
+        colorBar.style.display = 'none';
+      }
+    };
+
+    window.selectPen = function(color) {
+      isEraserMode = false;
+      currentColor = color;
+      document.getElementById('eraser-btn').classList.remove('active');
+      document.getElementById('live-eraser-btn').classList.remove('active');
+    };
+
+    window.toggleEraser = function() {
+      isEraserMode = !isEraserMode;
+      document.getElementById('eraser-btn').classList.toggle('active', isEraserMode);
+      document.getElementById('live-eraser-btn').classList.toggle('active', isEraserMode);
+    };
+
+    // 畫布塗鴉雙向同步
+    const pad = document.getElementById('draw-pad');
+    const pCtx = pad.getContext('2d');
+    const liveCanvas = document.getElementById('live-draw-canvas');
+    const lCtx = liveCanvas.getContext('2d');
+    let drawing = false, lastX = 0, lastY = 0;
+
+    function resizeDrawPad() {
+      if (pad.width !== pad.clientWidth || pad.height !== pad.clientHeight) {
+        pad.width = pad.clientWidth; pad.height = pad.clientHeight;
+      }
+    }
+
+    function resizeLiveCanvas() {
+      liveCanvas.width = window.innerWidth;
+      liveCanvas.height = window.innerHeight;
+    }
+
+    function handleStart(e, targetElement) {
+      drawing = true;
+      const rect = targetElement.getBoundingClientRect();
+      const touch = e.touches ? e.touches[0] : e;
+      lastX = touch.clientX - rect.left;
+      lastY = touch.clientY - rect.top;
+    }
+
+    function handleMove(e, targetCtx, targetElement) {
+      if (!drawing) return;
+      const screenId = getScreenId(); if (!screenId) return;
+      const rect = targetElement.getBoundingClientRect();
+      const touch = e.touches ? e.touches[0] : e;
+      const currentX = touch.clientX - rect.left;
+      const currentY = touch.clientY - rect.top;
+
+      push(ref(db, `screens/${screenId}/drawEvents`), {
+        x0: lastX / targetElement.width, y0: lastY / targetElement.height,
+        x1: currentX / targetElement.width, y1: currentY / targetElement.height,
+        color: currentColor,
+        size: isEraserMode ? 20 : 4,
+        isEraser: isEraserMode
+      });
+
+      lastX = currentX; lastY = currentY;
+    }
+
+    function handleEnd() { drawing = false; }
+
+    pad.addEventListener('touchstart', e => handleStart(e, pad));
+    pad.addEventListener('touchmove', e => handleMove(e, pCtx, pad));
+    pad.addEventListener('touchend', handleEnd);
+    pad.addEventListener('mousedown', e => handleStart(e, pad));
+    pad.addEventListener('mousemove', e => handleMove(e, pCtx, pad));
+    pad.addEventListener('mouseup', handleEnd);
+
+    liveCanvas.addEventListener('touchstart', e => handleStart(e, liveCanvas));
+    liveCanvas.addEventListener('touchmove', e => handleMove(e, lCtx, liveCanvas));
+    liveCanvas.addEventListener('touchend', handleEnd);
+    liveCanvas.addEventListener('mousedown', e => handleStart(e, liveCanvas));
+    liveCanvas.addEventListener('mousemove', e => handleMove(e, lCtx, liveCanvas));
+    liveCanvas.addEventListener('mouseup', handleEnd);
+
+    // 接收大屏端畫筆筆跡（雙向同步）
+    const screenId = getScreenId();
+    if (screenId) {
+      onChildAdded(ref(db, `screens/${screenId}/drawEvents`), (snapshot) => {
+        const d = snapshot.val();
+        if (d) {
+          pCtx.beginPath();
+          pCtx.moveTo(d.x0 * pad.width, d.y0 * pad.height);
+          pCtx.lineTo(d.x1 * pad.width, d.y1 * pad.height);
+          if (d.isEraser) {
+            pCtx.globalCompositeOperation = 'destination-out';
+            pCtx.lineWidth = d.size || 20;
+          } else {
+            pCtx.globalCompositeOperation = 'source-over';
+            pCtx.strokeStyle = d.color;
+            pCtx.lineWidth = d.size || 4;
+          }
+          pCtx.lineCap = 'round'; pCtx.stroke();
+          pCtx.globalCompositeOperation = 'source-over';
+        }
+      });
+
+      onValue(ref(db, `screens/${screenId}/drawEvents`), (snapshot) => {
+        if (!snapshot.exists()) {
+          pCtx.clearRect(0, 0, pad.width, pad.height);
+        }
+      });
+    }
+
+    window.clearCanvas = function() {
+      const screenId = getScreenId(); if (!screenId) return;
+      pCtx.clearRect(0, 0, pad.width, pad.height);
+      lCtx.clearRect(0, 0, liveCanvas.width, liveCanvas.height);
+      remove(ref(db, `screens/${screenId}/drawEvents`));
+    };
+
+    function getScreenId() {
+      const id = document.getElementById('room-input').value.trim();
+      if (!id) alert('請先輸入大屏房間碼！');
+      return id;
+    }
+
+    function toggleMediaUI(type, isRunning) {
+      const startBtn = document.getElementById(type === 'camera' ? 'cam-start-btn' : 'mic-start-btn');
+      const stopBtn = document.getElementById(type === 'camera' ? 'cam-stop-btn' : 'mic-stop-btn');
+      if (startBtn) startBtn.style.display = isRunning ? 'none' : 'block';
+      if (stopBtn) stopBtn.style.display = isRunning ? 'block' : 'none';
+    }
+  </script>
+</body>
+</html>
