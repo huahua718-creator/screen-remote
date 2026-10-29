@@ -57,6 +57,7 @@
     <div class="card">
       <label for="room-input">大屏房間碼 (PIN)：</label>
       <input type="text" id="room-input" placeholder="例如：839201" onchange="listenToPageRequests()">
+      <button class="action-btn stop-btn" onclick="resetRemoteScreen()" style="margin-top: 5px;">⏹️ 結束大屏投放 (返回待機)</button>
     </div>
 
     <div class="nav-tabs">
@@ -779,6 +780,22 @@
       if (startBtn) startBtn.style.display = isRunning ? 'none' : 'block';
       if (stopBtn) stopBtn.style.display = isRunning ? 'block' : 'none';
     }
+    window.resetRemoteScreen = function() {
+  const screenId = getScreenId();
+  if (!screenId) return;
+  
+  if (confirm('確定要結束大屏當前投放，讓大屏返回待機 QR Code 畫面嗎？')) {
+    stopWebRTC(); // 若手機正在開鏡頭/麥克風，先停止本地傳輸
+    
+    // 傳送 idle 指令給 Firebase，大屏收到後會立刻重設畫面
+    set(ref(db, 'screens/' + screenId), {
+      mode: 'idle',
+      updatedAt: Date.now()
+    }).then(() => {
+      alert('已成功讓大屏返回待機畫面！');
+    });
+  }
+};
   </script>
 </body>
 </html>
