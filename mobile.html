@@ -4,7 +4,413 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>傳屏遙控器</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js">
+    // ==========================================
+    // 📁 雙向 P2P 檔案傳輸模組 (WebRTC DataChannel)
+    // ==========================================
+    let mobileSelectedFiles = [];
+    let mobileReceivedFiles = [];
+    let ftPeerConnection = null;
+    let ftDataChannel = null;
+    let ftIceCandidateQueue = [];
+    let isFtConnecting = false;
+    let ftAnswerListener = null;
+    let ftCalleeListener = null;
+    let ftIncomingFile = null;
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+    }
+
+    window.handleMobileFilesSelect = function(files) {
+      if (!files || files.length === 0) return;
+      mobileSelectedFiles = Array.from(files);
+      renderMobileSelectedFiles();
+    };
+
+    function renderMobileSelectedFiles() {
+      const box = document.getElementById('mobile-selected-files-box');
+      const list = document.getElementById('mobile-selected-files-list');
+      const summary = document.getElementById('mobile-selected-summary');
+      const sendBtn = document.getElementById('mobile-send-btn');
+
+      if (mobileSelectedFiles.length === 0) {
+        box.style.display = 'none';
+        sendBtn.disabled = true;
+        return;
+      }
+
+      box.style.display = 'block';
+      sendBtn.disabled = false;
+      const totalBytes = mobileSelectedFiles.reduce((acc, f) => acc + f.size, 0);
+      summary.innerText = `已選擇 ${mobileSelectedFiles.length} 個檔案 (共 ${formatBytes(totalBytes)})`;
+
+      list.innerHTML = mobileSelectedFiles.map((f, idx) => `
+        <div class="ft-file-item">
+          <span class="ft-file-name" title="${f.name}">📄 ${f.name}</span>
+          <span class="ft-file-size">${formatBytes(f.size)}</span>
+        </div>
+      `).join('');
+    }
+
+    window.clearMobileSelectedFiles = function() {
+      mobileSelectedFiles = [];
+      document.getElementById('mobile-ft-input').value = '';
+      renderMobileSelectedFiles();
+    };
+
+    function updateMobileFtStatus(status, text) {
+      const badge = document.getElementById('mobile-ft-status');
+      if (!badge) return;
+      if (status === 'connected') {
+        badge.innerHTML = `<span style="color:#34c759;">🟢 通道已連線</span>`;
+      } else if (status === 'connecting') {
+        badge.innerHTML = `<span style="color:#ff9500;">🟡 連線握手中...</span>`;
+      } else {
+        badge.innerHTML = `<span style="color:#8e8e93;">⚪ 待命</span>`;
+      }
+    }
+
+    // 建立/確保檔案傳輸通道連線 (由手機作為 Caller)
+    window.ensureMobileFtConnection = async function(userTriggered = false) {
+      const screenId = getScreenId();
+      if (!screenId) return false;
+
+      if (ftDataChannel && ftDataChannel.readyState === 'open') {
+        updateMobileFtStatus('connected');
+        if (userTriggered) alert('大屏檔案傳輸通道已在連線狀態！');
+        return true;
+      }
+
+      if (isFtConnecting) return false;
+      isFtConnecting = true;
+      updateMobileFtStatus('connecting');
+
+      try {
+        if (ftPeerConnection) {
+          try { ftPeerConnection.close(); } catch(e){}
+          ftPeerConnection = null;
+        }
+
+        ftPeerConnection = new RTCPeerConnection(rtcConfig);
+        ftIceCandidateQueue = [];
+
+        ftDataChannel = ftPeerConnection.createDataChannel('screenPusherFtChannel');
+        setupMobileFtDataChannel(ftDataChannel);
+
+        ftPeerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            push(ref(db, `screens/${screenId}/fileTransfer/callerCandidates`), event.candidate.toJSON());
+          }
+        };
+
+        if (ftCalleeListener) off(ftCalleeListener);
+        ftCalleeListener = ref(db, `screens/${screenId}/fileTransfer/calleeCandidates`);
+        onChildAdded(ftCalleeListener, (snap) => {
+          const val = snap.val();
+          if (val && ftPeerConnection) {
+            const cand = new RTCIceCandidate(val);
+            if (ftPeerConnection.remoteDescription) {
+              ftPeerConnection.addIceCandidate(cand).catch(e => console.warn(e));
+            } else {
+              ftIceCandidateQueue.push(cand);
+            }
+          }
+        });
+
+        // 建立 Offer
+        const offer = await ftPeerConnection.createOffer();
+        await ftPeerConnection.setLocalDescription(offer);
+
+        // 清理舊資料並寫入 Offer
+        await remove(ref(db, `screens/${screenId}/fileTransfer/calleeCandidates`));
+        await remove(ref(db, `screens/${screenId}/fileTransfer/callerCandidates`));
+        await remove(ref(db, `screens/${screenId}/fileTransfer/answer`));
+        await set(ref(db, `screens/${screenId}/fileTransfer/offer`), {
+          sdp: offer.sdp,
+          type: offer.type,
+          timestamp: Date.now()
+        });
+
+        // 監聽 Answer
+        if (ftAnswerListener) off(ftAnswerListener);
+        ftAnswerListener = ref(db, `screens/${screenId}/fileTransfer/answer`);
+        onValue(ftAnswerListener, async (snap) => {
+          const ans = snap.val();
+          if (ans && ftPeerConnection && ftPeerConnection.signalingState !== 'stable') {
+            await ftPeerConnection.setRemoteDescription(new RTCSessionDescription(ans)).catch(e => console.error(e));
+            while (ftIceCandidateQueue.length > 0) {
+              const cand = ftIceCandidateQueue.shift();
+              await ftPeerConnection.addIceCandidate(cand).catch(e => console.warn(e));
+            }
+          }
+        });
+
+        return true;
+      } catch (err) {
+        console.error("建立檔案通道失敗:", err);
+        updateMobileFtStatus('error');
+        isFtConnecting = false;
+        return false;
+      }
+    };
+
+    function setupMobileFtDataChannel(dc) {
+      dc.binaryType = 'arraybuffer';
+
+      dc.onopen = () => {
+        isFtConnecting = false;
+        updateMobileFtStatus('connected');
+        console.log("手機端檔案 DataChannel 已開啟！");
+      };
+
+      dc.onclose = () => {
+        updateMobileFtStatus('disconnected');
+        console.log("手機端檔案 DataChannel 已關閉");
+      };
+
+      dc.onerror = (err) => {
+        console.error("手機端 DataChannel 錯誤:", err);
+      };
+
+      // 接收來自大屏的檔案
+      dc.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'file-meta') {
+              ftIncomingFile = {
+                name: msg.name,
+                size: msg.size,
+                mime: msg.mime,
+                index: msg.index,
+                total: msg.total,
+                bytes: 0,
+                chunks: []
+              };
+              showMobileRecvProgress(true, `正在接收來自大屏第 ${msg.index}/${msg.total} 個檔案: ${msg.name}`, 0);
+            } else if (msg.type === 'file-done') {
+              if (ftIncomingFile) {
+                const blob = new Blob(ftIncomingFile.chunks, { type: ftIncomingFile.mime || 'application/octet-stream' });
+                const item = {
+                  name: ftIncomingFile.name,
+                  size: ftIncomingFile.size,
+                  url: URL.createObjectURL(blob),
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                };
+                mobileReceivedFiles.push(item);
+                renderMobileReceivedFiles();
+                ftIncomingFile = null;
+              }
+            } else if (msg.type === 'batch-done') {
+              showMobileRecvProgress(false);
+              alert(`🎉 成功接收來自大屏的 ${msg.total} 個檔案！`);
+            }
+          } catch(e) {
+            console.error("解析訊息失敗", e);
+          }
+        } else if (event.data instanceof ArrayBuffer) {
+          if (ftIncomingFile) {
+            ftIncomingFile.chunks.push(event.data);
+            ftIncomingFile.bytes += event.data.byteLength;
+            const pct = Math.min(100, Math.round((ftIncomingFile.bytes / ftIncomingFile.size) * 100));
+            showMobileRecvProgress(true, `正在接收 (${ftIncomingFile.index}/${ftIncomingFile.total})：${ftIncomingFile.name} (${pct}%)`, pct);
+          }
+        }
+      };
+    }
+
+    function showMobileRecvProgress(show, text = '', pct = 0) {
+      const box = document.getElementById('mobile-recv-progress-box');
+      const txt = document.getElementById('mobile-recv-status-text');
+      const bar = document.getElementById('mobile-recv-bar');
+      box.style.display = show ? 'block' : 'none';
+      if (show) {
+        txt.innerText = text;
+        bar.style.width = pct + '%';
+      }
+    }
+
+    function renderMobileReceivedFiles() {
+      const list = document.getElementById('mobile-received-files-list');
+      const allBtn = document.getElementById('mobile-download-all-btn');
+      if (mobileReceivedFiles.length === 0) {
+        list.innerHTML = `<p style="color: #999; font-size: 0.85rem; text-align: center; margin: 12px 0;">目前尚無接收到的檔案</p>`;
+        allBtn.style.display = 'none';
+        return;
+      }
+
+      allBtn.style.display = 'inline-block';
+      list.innerHTML = mobileReceivedFiles.map((f, i) => `
+        <div class="ft-file-item">
+          <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:65%;">
+            <div style="font-weight:bold; overflow:hidden; text-overflow:ellipsis;">📄 ${f.name}</div>
+            <div style="font-size:0.75rem; color:#888;">${formatBytes(f.size)} • ${f.time}</div>
+          </div>
+          <a class="ft-download-btn" href="${f.url}" download="${f.name}">📥 下載</a>
+        </div>
+      `).join('');
+    }
+
+    window.downloadAllMobileReceived = function() {
+      if (mobileReceivedFiles.length === 0) return;
+      mobileReceivedFiles.forEach((f, idx) => {
+        setTimeout(() => {
+          const a = document.createElement('a');
+          a.href = f.url;
+          a.download = f.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }, idx * 300);
+      });
+    };
+
+    window.clearMobileReceivedFiles = function() {
+      if (confirm('確定要清空已接收的檔案紀錄嗎？')) {
+        mobileReceivedFiles.forEach(f => URL.revokeObjectURL(f.url));
+        mobileReceivedFiles = [];
+        renderMobileReceivedFiles();
+      }
+    };
+
+    // 發送選取的檔案給大屏 (支援複數檔案，分塊發送與背壓控制)
+    window.sendMobileFiles = async function() {
+      if (mobileSelectedFiles.length === 0) return;
+      const screenId = getScreenId();
+      if (!screenId) return;
+
+      const progressBox = document.getElementById('mobile-send-progress-box');
+      const statusText = document.getElementById('mobile-send-status-text');
+      const progressBar = document.getElementById('mobile-send-bar');
+      const sendBtn = document.getElementById('mobile-send-btn');
+
+      // 檢查連線
+      if (!ftDataChannel || ftDataChannel.readyState !== 'open') {
+        statusText.innerText = '⏳ 正在與大屏建立點對點加密通道...';
+        progressBox.style.display = 'block';
+        sendBtn.disabled = true;
+
+        await ensureMobileFtConnection();
+
+        // 等待 DataChannel 開啟 (最多等 8 秒)
+        let waited = 0;
+        while ((!ftDataChannel || ftDataChannel.readyState !== 'open') && waited < 80) {
+          await new Promise(r => setTimeout(r, 100));
+          waited++;
+        }
+
+        if (!ftDataChannel || ftDataChannel.readyState !== 'open') {
+          alert('無法與大屏建立點對點傳輸通道，請確保大屏處於開啟狀態並已配對相同 PIN 碼！');
+          progressBox.style.display = 'none';
+          sendBtn.disabled = false;
+          return;
+        }
+      }
+
+      sendBtn.disabled = true;
+      progressBox.style.display = 'block';
+
+      const totalFiles = mobileSelectedFiles.length;
+      const totalBytes = mobileSelectedFiles.reduce((acc, f) => acc + f.size, 0);
+      let sentOverallBytes = 0;
+      const CHUNK_SIZE = 64 * 1024; // 64KB
+
+      try {
+        for (let i = 0; i < totalFiles; i++) {
+          const file = mobileSelectedFiles[i];
+
+          // 1. 發送檔案 meta
+          ftDataChannel.send(JSON.stringify({
+            type: 'file-meta',
+            name: file.name,
+            size: file.size,
+            mime: file.type || 'application/octet-stream',
+            index: i + 1,
+            total: totalFiles
+          }));
+
+          // 2. 分塊發送
+          let offset = 0;
+          while (offset < file.size) {
+            // 背壓控制 (如果緩衝大於 8MB 則暫停)
+            if (ftDataChannel.bufferedAmount > 8 * 1024 * 1024) {
+              await new Promise(r => setTimeout(r, 40));
+              continue;
+            }
+
+            const slice = file.slice(offset, offset + CHUNK_SIZE);
+            const arrayBuffer = await slice.arrayBuffer();
+            ftDataChannel.send(arrayBuffer);
+
+            offset += arrayBuffer.byteLength;
+            sentOverallBytes += arrayBuffer.byteLength;
+
+            const filePct = Math.min(100, Math.round((offset / file.size) * 100));
+            const overallPct = Math.min(100, Math.round((sentOverallBytes / totalBytes) * 100));
+
+            statusText.innerText = `傳送中 (${i + 1}/${totalFiles})：${file.name} [${filePct}%]`;
+            progressBar.style.width = overallPct + '%';
+          }
+
+          // 3. 單檔傳送結束
+          ftDataChannel.send(JSON.stringify({
+            type: 'file-done',
+            name: file.name,
+            index: i + 1,
+            total: totalFiles
+          }));
+        }
+
+        // 4. 整批傳送結束
+        ftDataChannel.send(JSON.stringify({
+          type: 'batch-done',
+          total: totalFiles
+        }));
+
+        statusText.innerText = `✅ 全部 ${totalFiles} 個檔案已全數成功傳送至大屏！`;
+        progressBar.style.width = '100%';
+        setTimeout(() => {
+          clearMobileSelectedFiles();
+          progressBox.style.display = 'none';
+          sendBtn.disabled = false;
+        }, 1500);
+
+      } catch (err) {
+        console.error("傳送檔案出錯:", err);
+        alert('傳送過程中發生錯誤：' + err.message);
+        progressBox.style.display = 'none';
+        sendBtn.disabled = false;
+      }
+    };
+
+    // 監聽大屏傳送請求 (若大屏想傳檔案給手機，自動打通通道)
+    function listenToScreenFtRequests() {
+      const screenId = getScreenId();
+      if (!screenId) return;
+      const ftReqRef = ref(db, `screens/${screenId}/fileTransfer/request`);
+      onValue(ftReqRef, (snap) => {
+        const val = snap.val();
+        if (val && val.timestamp) {
+          console.log("偵測到大屏端請求檔案傳輸連線，自動打通通道...");
+          ensureMobileFtConnection();
+        }
+      });
+    }
+
+    // 當切換到檔案傳輸頁籤時自動嘗試握手連線
+    const originalSwitchTab = window.switchTab;
+    window.switchTab = function(tabId, btn) {
+      originalSwitchTab(tabId, btn);
+      if (tabId === 'file-tab') {
+        ensureMobileFtConnection();
+      }
+    };
+
+  </script>
   <style>
     body { font-family: sans-serif; padding: 12px; background: #f2f2f7; color: #333; margin: 0; }
     .card { background: white; padding: 16px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 12px; }
@@ -37,18 +443,39 @@
     #local-preview { width: 100%; height: 100%; object-fit: cover; }
     #live-draw-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; touch-action: none; pointer-events: none; }
     
+    /* 懸浮列自適應與防溢出樣式 */
     .floating-bar { 
-      position: absolute; top: 20px; left: 50%; transform: translateX(-50%); 
-      display: flex; gap: 12px; background: rgba(0,0,0,0.75); padding: 8px 16px; 
+      position: absolute; top: 15px; left: 50%; transform: translateX(-50%); 
+      display: flex; gap: 5px; background: rgba(0,0,0,0.85); padding: 6px 12px; 
       border-radius: 30px; backdrop-filter: blur(10px); z-index: 10001;
+      max-width: 96vw; box-sizing: border-box; align-items: center; justify-content: center;
+      overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch;
     }
-    .float-btn { border: none; padding: 8px 16px; border-radius: 20px; font-size: 1.3rem; font-weight: bold; color: white; cursor: pointer; }
+    /* 隱藏懸浮列捲動條 */
+    .floating-bar::-webkit-scrollbar { display: none; }
+    .floating-bar .color-btn { 
+      width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; 
+      cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.3); flex-shrink: 0; 
+    }
+    .float-btn { 
+      border: none; padding: 6px 10px; border-radius: 18px; font-size: 1.05rem; 
+      font-weight: bold; color: white; cursor: pointer; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; 
+    }
 
     #progress-container { display: none; margin-top: 10px; background: #e5e5ea; border-radius: 8px; overflow: hidden; height: 12px; }
     #progress-bar { width: 0%; height: 100%; background: #34c759; transition: width 0.1s; }
 
+    /* 翻頁控制列樣式 */
     .nav-pager-box { display: none; margin-bottom: 8px; padding: 8px; background: #e5e5ea; border-radius: 8px; text-align: center; }
     .nav-pager-btn { padding: 6px 16px; border-radius: 6px; border: none; background: #007aff; color: white; font-weight: bold; cursor: pointer; }
+
+    /* 檔案傳輸相關樣式 */
+    .ft-file-item { display: flex; justify-content: space-between; align-items: center; padding: 7px 8px; border-bottom: 1px solid #f0f0f0; font-size: 0.85rem; }
+    .ft-file-item:last-child { border-bottom: none; }
+    .ft-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; font-weight: 500; }
+    .ft-file-size { color: #888; font-size: 0.75rem; margin-left: 6px; }
+    .ft-download-btn { background: #34c759; color: white; border: none; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; }
+
   </style>
 </head>
 <body>
@@ -64,7 +491,7 @@
       <button class="tab-btn active" onclick="switchTab('url-tab', this)">網址推送</button>
       <button class="tab-btn" id="cam-tab-btn" onclick="switchTab('camera-tab', this)">媒體與鏡頭</button>
       <button class="tab-btn" id="draw-tab-btn" onclick="switchTab('draw-tab', this)">畫筆標註</button>
-      <button class="tab-btn" onclick="switchTab('mic-tab', this)">麥克風</button>
+      <button class="tab-btn" id="file-tab-btn" onclick="switchTab('file-tab', this)">📁 檔案傳輸</button>
     </div>
 
     <!-- 1. 網址推送頁籤 -->
@@ -105,16 +532,19 @@
       <button id="cam-start-btn" class="action-btn push-btn" onclick="startWebRTC('camera')">🎥 開啟手機全螢幕實時鏡頭</button>
     </div>
 
-    <!-- 3. 畫筆標註頁籤 -->
+    <!-- 3. 畫筆標註頁籤 (🌟 已將照片/PDF 翻頁按鈕改移至此處) -->
     <div id="draw-tab" class="tab-content card">
       <label id="draw-status-label">在畫布上手指滑動標註，大屏同步繪製：</label>
+      <button class="action-btn" style="background: #5856d6; margin-bottom: 10px;" onclick="openDrawFullscreen()">⛶ 開啟全螢幕手繪標註</button>
 
+      <!-- 🌟 相片翻頁列 -->
       <div id="photo-pager" class="nav-pager-box">
         <button class="nav-pager-btn" onclick="prevPhoto()">◄ 上一張</button>
         <span id="photo-indicator" style="margin: 0 10px; font-weight:bold; font-size:0.9rem;">1 / 1</span>
         <button class="nav-pager-btn" onclick="nextPhoto()">下一張 ►</button>
       </div>
 
+      <!-- 🌟 PDF 頁數翻頁列 -->
       <div id="pdf-pager" class="nav-pager-box">
         <button class="nav-pager-btn" onclick="prevPdfPage()">◄ 上一頁</button>
         <span id="pdf-indicator" style="margin: 0 10px; font-weight:bold; font-size:0.9rem;">第 1 / 1 頁</span>
@@ -129,20 +559,86 @@
         <div class="color-btn" style="background:#34c759;" onclick="selectPen('#34c759')"></div>
         <div class="color-btn" style="background:#007aff;" onclick="selectPen('#007aff')"></div>
         <div class="color-btn" style="background:#ffffff;" onclick="selectPen('#ffffff')"></div>
-        <button class="tool-btn" id="eraser-btn" onclick="toggleEraser()">🧹 橡皮擦</button>
+        <button class="tool-btn" id="eraser-btn" onclick="toggleEraser()">🧽 橡皮擦</button>
       </div>
 
       <div style="display: flex; gap: 8px;">
         <button class="action-btn stop-btn" style="flex: 1;" onclick="clearCanvas()">🧹 清除畫筆筆蹟</button>
-        <button class="action-btn" style="flex: 1; background:#8e8e93;" onclick="clearPhotoBackground()">🖼️ 移除背景照片</button>
+        <button class="action-btn" style="flex: 1; background:#8e8e93;" onclick="clearPhotoBackground()">🗑️ 移除背景照片</button>
       </div>
     </div>
 
-    <!-- 4. 無線麥克風頁籤 -->
-    <div id="mic-tab" class="tab-content card">
-      <p style="font-size: 0.85rem; color: #666; margin-bottom: 10px;">聲音由大屏喇叭即時播報</p>
-      <button id="mic-start-btn" class="action-btn" onclick="startWebRTC('mic')">開啟無線麥克風</button>
-      <button id="mic-stop-btn" class="action-btn stop-btn" style="display:none;" onclick="stopWebRTC()">關閉麥克風</button>
+    <!-- 4. 檔案傳輸頁籤 (支援雙向與複數檔案傳送) -->
+    <div id="file-tab" class="tab-content card">
+      <!-- 傳輸限制與說明 -->
+      <div style="background: #eef7ff; border: 1px solid #b8daff; border-radius: 10px; padding: 12px; margin-bottom: 12px; font-size: 0.85rem; color: #004085; line-height: 1.5;">
+        <div style="font-weight: bold; margin-bottom: 6px; font-size: 0.95rem;">📋 檔案傳輸限制與注意事項：</div>
+        <div>• <strong>⚡ 雙向傳輸</strong>：支援「手機傳輸至大屏」與「大屏傳輸至手機」。</div>
+        <div>• <strong>🚀 高速直連</strong>：採用 WebRTC P2P 端對端加密傳輸，不經過第三方伺服器，安全且不限檔案格式（文件、PDF、圖片、影片、ZIP等）。</div>
+        <div>• <strong>⚠️ 檔案大小限制</strong>：
+          <span style="display:block; padding-left:12px;">- 單一檔案建議小於 <strong>100 MB</strong></span>
+          <span style="display:block; padding-left:12px;">- 單次多檔總容量建議小於 <strong>300 MB</strong></span>
+          <span style="color: #666; font-size: 0.8rem; display:block; padding-left:12px;">（因行動裝置瀏覽器記憶體緩存限制，避免檔案過大導致網頁閃退）</span>
+        </div>
+        <div>• <strong>💡 傳送提醒</strong>：傳送時請維持本頁面在前台，請勿鎖屏或切換到後台應用。</div>
+      </div>
+
+      <!-- 連線狀態欄 -->
+      <div style="display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 0.85rem;">
+        <span>大屏傳輸通道：<strong id="mobile-ft-status" style="color: #666;">🟡 待命連線中</strong></span>
+        <button type="button" onclick="ensureMobileFtConnection(true)" style="padding: 4px 10px; font-size: 0.75rem; border: 1px solid #ccc; background: white; border-radius: 6px; cursor: pointer;">手動連線</button>
+      </div>
+
+      <!-- 區塊一：手機傳至大屏 -->
+      <div style="border: 1px dashed #007aff; border-radius: 10px; padding: 12px; background: #fafcff; margin-bottom: 14px;">
+        <label style="font-weight: bold; color: #007aff; font-size: 0.95rem; margin-bottom: 6px;">📤 傳送檔案至大屏 (支援複數檔案)</label>
+        <input type="file" id="mobile-ft-input" multiple style="display: none;" onchange="handleMobileFilesSelect(this.files)">
+        <div style="display: flex; gap: 8px;">
+          <button class="action-btn" type="button" onclick="document.getElementById('mobile-ft-input').click()" style="background: #007aff; flex: 1;">📂 選擇檔案 (支援多選)</button>
+          <button class="action-btn push-btn" id="mobile-send-btn" type="button" onclick="sendMobileFiles()" style="flex: 1;" disabled>🚀 開始傳送</button>
+        </div>
+
+        <!-- 選取檔案預覽與清單 -->
+        <div id="mobile-selected-files-box" style="margin-top: 10px; display: none;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #555; margin-bottom: 6px;">
+            <span id="mobile-selected-summary">已選擇 0 個檔案</span>
+            <span style="color: #ff3b30; cursor: pointer; text-decoration: underline;" onclick="clearMobileSelectedFiles()">清空選擇</span>
+          </div>
+          <div id="mobile-selected-files-list" style="max-height: 140px; overflow-y: auto; background: white; border: 1px solid #eee; border-radius: 8px; padding: 6px;"></div>
+        </div>
+
+        <!-- 傳送進度條 -->
+        <div id="mobile-send-progress-box" style="display: none; margin-top: 10px;">
+          <div id="mobile-send-status-text" style="font-size: 0.85rem; color: #007aff; font-weight: bold; margin-bottom: 4px;">準備發送中...</div>
+          <div style="background: #e5e5ea; border-radius: 8px; overflow: hidden; height: 10px;">
+            <div id="mobile-send-bar" style="width: 0%; height: 100%; background: #007aff; transition: width 0.1s;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 區塊二：接收自大屏的檔案 -->
+      <div style="border: 1px solid #e5e5ea; border-radius: 10px; padding: 12px; background: white;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <label style="font-weight: bold; color: #34c759; font-size: 0.95rem; margin: 0;">📥 接收自大屏的檔案</label>
+          <div style="display: flex; gap: 6px;">
+            <button id="mobile-download-all-btn" onclick="downloadAllMobileReceived()" style="display: none; padding: 4px 8px; font-size: 0.75rem; background: #34c759; color: white; border: none; border-radius: 6px; cursor: pointer;">📦 全部下載</button>
+            <button onclick="clearMobileReceivedFiles()" style="padding: 4px 8px; font-size: 0.75rem; background: #8e8e93; color: white; border: none; border-radius: 6px; cursor: pointer;">清空</button>
+          </div>
+        </div>
+
+        <!-- 接收進度條 -->
+        <div id="mobile-recv-progress-box" style="display: none; margin-bottom: 8px;">
+          <div id="mobile-recv-status-text" style="font-size: 0.85rem; color: #34c759; font-weight: bold; margin-bottom: 4px;">正在接收檔案...</div>
+          <div style="background: #e5e5ea; border-radius: 8px; overflow: hidden; height: 10px;">
+            <div id="mobile-recv-bar" style="width: 0%; height: 100%; background: #34c759; transition: width 0.1s;"></div>
+          </div>
+        </div>
+
+        <!-- 已接收檔案列表 -->
+        <div id="mobile-received-files-list" style="max-height: 200px; overflow-y: auto;">
+          <p style="color: #999; font-size: 0.85rem; text-align: center; margin: 12px 0;">目前尚無接收到的檔案</p>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -151,9 +647,13 @@
     <canvas id="live-draw-canvas"></canvas>
 
     <div class="floating-bar">
-      <button class="float-btn" style="background:#34c759;" onclick="pushSnapshotToScreen()" title="拍照推送">📷</button>
-      <button class="float-btn" id="live-draw-btn" style="background:#007aff;" onclick="toggleLiveDraw()" title="畫筆標註">✏️</button>
-      <button class="float-btn" style="background:#ff3b30;" onclick="stopWebRTC()" title="關閉鏡頭">❌</button>
+  <button class="float-btn" style="background:#34c759;" onclick="pushSnapshotToScreen()" title="拍照推送">📷</button>
+  <button class="float-btn" id="cam-switch-btn" style="background:#5856d6;" onclick="switchCamera()" title="切換前後鏡頭">🔄</button>
+  <button class="float-btn" id="cam-mic-btn" style="background:#8e8e93;" onclick="toggleCamMic()" title="聲音傳送 (預設靜音)">🔇</button>
+  <button class="float-btn" id="cam-record-btn" style="background:#ff9500;" onclick="toggleCameraRecording()" title="邊投屏邊錄影">🔴</button>
+  <button class="float-btn" id="cam-split-btn" style="background:#17a2b8; display:none;" onclick="splitRecordingSegment()" title="儲存當前片段並開啟下一段">✂️</button>
+  <button class="float-btn" id="live-draw-btn" style="background:#007aff;" onclick="toggleLiveDraw()" title="畫筆標註">✏️</button>
+  <button class="float-btn" style="background:#ff3b30;" onclick="stopWebRTC()" title="關閉鏡頭">❌</button>
     </div>
 
     <div id="live-color-bar" class="tool-bar" style="display:none; position:absolute; top:75px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.75); padding:8px 15px; border-radius:25px; z-index:10001;">
@@ -164,6 +664,23 @@
       <div class="color-btn" style="background:#ffffff;" onclick="selectPen('#ffffff')"></div>
       <button class="tool-btn" id="live-eraser-btn" onclick="toggleEraser()">🧹 橡皮擦</button>
     </div>
+    </div>
+    <!-- 🌟 全螢幕手繪標註 overlay -->
+<div id="draw-fullscreen-overlay" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:#1c1c1e; z-index:9999;">
+  <canvas id="fs-draw-pad" style="width:100%; height:100%; background-size:contain; background-repeat:no-repeat; background-position:center; touch-action:none;"></canvas>
+
+  <!-- 懸浮工具列 (包含筆觸顏色、橡皮擦、清除筆跡、移除背景照片、退出) -->
+ <div class="floating-bar">
+    <div class="color-btn" style="background:#ff3b30;" onclick="selectPen('#ff3b30')"></div>
+    <div class="color-btn" style="background:#ffcc00;" onclick="selectPen('#ffcc00')"></div>
+    <div class="color-btn" style="background:#34c759;" onclick="selectPen('#34c759')"></div>
+    <div class="color-btn" style="background:#007aff;" onclick="selectPen('#007aff')"></div>
+    <div class="color-btn" style="background:#ffffff;" onclick="selectPen('#ffffff')"></div>
+    <button class="float-btn" id="fs-eraser-btn" style="background:#555;" onclick="toggleEraser()" title="橡皮擦">🧽</button>
+    <button class="float-btn" style="background:#ff3b30;" onclick="clearCanvas()" title="清除筆跡">🧹</button>
+    <button class="float-btn" style="background:#8e8e93;" onclick="clearPhotoBackground()" title="移除背景照片">🗑️</button>
+    <button class="float-btn" style="background:#e0245e;" onclick="closeDrawFullscreen()" title="退出全螢幕">↙️</button>
+  </div>
   </div>
 
   <script type="module">
@@ -200,8 +717,9 @@
 
     const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-    document.addEventListener('DOMContentLoaded', () => { loadHistory(); listenToPageRequests(); });
+    document.addEventListener('DOMContentLoaded', () => { loadHistory(); listenToPageRequests(); listenToScreenFtRequests(); });
 
+    // 監聽大屏傳來的翻頁要求
     window.listenToPageRequests = function() {
       const screenId = getScreenId(); if (!screenId) return;
       if (requestPageRef) off(requestPageRef);
@@ -285,6 +803,7 @@
       set(ref(db, 'screens/' + screenId), { mode: 'url', url: url, updatedAt: Date.now() });
     };
 
+    // 多圖選取
     window.handleGallerySelect = async function(e) {
       const files = Array.from(e.target.files);
       if (files.length === 0) return;
@@ -353,6 +872,7 @@
     window.prevPhoto = function() { sendPhotoIndex(currentPhotoIndex - 1); };
     window.nextPhoto = function() { sendPhotoIndex(currentPhotoIndex + 1); };
 
+    // PDF 文件處理
     window.handlePdfSelect = async function(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -425,6 +945,7 @@
       iceCandidateQueue = [];
     }
 
+    // P2P 影片檔推送
     window.handleVideoFileSelect = async function(e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -518,69 +1039,210 @@
       });
     };
 
-    window.startWebRTC = async function(type) {
-      try {
-        const constraints = type === 'camera' 
-          ? { video: { facingMode: { ideal: "environment" } }, audio: false }
-          : { video: false, audio: true };
-
-        localStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-        if (type === 'camera') {
-          const preview = document.getElementById('local-preview');
-          preview.srcObject = localStream;
-          preview.play().catch(e => console.log("Safari 鏡頭預覽:", e));
-          document.getElementById('camera-fullscreen-overlay').style.display = 'block';
-          resizeLiveCanvas();
+    // 實體鏡頭
+    let currentFacingMode = 'environment'; // 預設後置鏡頭 ('environment' / 'user')
+    let isCamMicEnabled = false;           // 預設聲音關閉
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let isRecording = false;
+    // 1. 修改鏡頭啟動邏輯（同時申請影音權限，但預設聲音關閉）
+window.startWebRTC = async function(type) {
+  try {
+    const constraints = type === 'camera' 
+      ? { 
+          video: { facingMode: { ideal: currentFacingMode } }, 
+          audio: true // 同時獲取音訊軌道
         }
+      : { video: false, audio: true };
 
-        closePeerConnection();
-        const screenId = getScreenId(); if (!screenId) return;
-        await remove(ref(db, 'screens/' + screenId));
+    localStream = await navigator.mediaDevices.getUserMedia(constraints);
 
-        peerConnection = new RTCPeerConnection(rtcConfig);
-        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    if (type === 'camera') {
+      // 預設關閉聲音軌道（靜音）
+      localStream.getAudioTracks().forEach(track => track.enabled = false);
+      isCamMicEnabled = false;
 
-        calleeCandidatesRef = ref(db, `screens/${screenId}/calleeCandidates`);
-        onChildAdded(calleeCandidatesRef, (snapshot) => {
-          if (snapshot.val()) {
-            const candidate = new RTCIceCandidate(snapshot.val());
-            if (peerConnection && peerConnection.remoteDescription) {
-              peerConnection.addIceCandidate(candidate).catch(e => console.error(e));
-            } else {
-              iceCandidateQueue.push(candidate);
-            }
-          }
-        });
+      const preview = document.getElementById('local-preview');
+      preview.srcObject = localStream;
+      preview.play().catch(e => console.log("預覽播報:", e));
+      document.getElementById('camera-fullscreen-overlay').style.display = 'block';
+      resizeLiveCanvas();
+    }
 
-        peerConnection.onicecandidate = (event) => {
-          if (event.candidate) push(ref(db, `screens/${screenId}/callerCandidates`), event.candidate.toJSON());
-        };
+    closePeerConnection();
+    const screenId = getScreenId(); if (!screenId) return;
+    await remove(ref(db, 'screens/' + screenId));
 
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
+    peerConnection = new RTCPeerConnection(rtcConfig);
+    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
-        await update(ref(db, `screens/${screenId}`), {
-          mode: 'webrtc',
-          mediaType: type,
-          offer: { type: offer.type, sdp: offer.sdp }
-        });
+    calleeCandidatesRef = ref(db, `screens/${screenId}/calleeCandidates`);
+    onChildAdded(calleeCandidatesRef, (snapshot) => {
+      if (snapshot.val()) {
+        const candidate = new RTCIceCandidate(snapshot.val());
+        if (peerConnection && peerConnection.remoteDescription) {
+          peerConnection.addIceCandidate(candidate).catch(e => console.error(e));
+        } else {
+          iceCandidateQueue.push(candidate);
+        }
+      }
+    });
 
-        answerRef = ref(db, `screens/${screenId}/answer`);
-        onValue(answerRef, async (snap) => {
-          const ans = snap.val();
-          if (ans && peerConnection && peerConnection.signalingState !== 'stable') {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(ans)).catch(e => console.error(e));
-            while (iceCandidateQueue.length > 0) {
-              const cand = iceCandidateQueue.shift();
-              await peerConnection.addIceCandidate(cand).catch(e => console.error(e));
-            }
-          }
-        });
-
-        toggleMediaUI(type, true);
-      } catch (err) { alert('請確保已給予鏡頭/麥克風權限：' + err.message); }
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) push(ref(db, `screens/${screenId}/callerCandidates`), event.candidate.toJSON());
     };
+
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+
+    await update(ref(db, `screens/${screenId}`), {
+      mode: 'webrtc',
+      mediaType: type,
+      offer: { type: offer.type, sdp: offer.sdp }
+    });
+
+    answerRef = ref(db, `screens/${screenId}/answer`);
+    onValue(answerRef, async (snap) => {
+      const ans = snap.val();
+      if (ans && peerConnection && peerConnection.signalingState !== 'stable') {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(ans)).catch(e => console.error(e));
+        while (iceCandidateQueue.length > 0) {
+          const cand = iceCandidateQueue.shift();
+          await peerConnection.addIceCandidate(cand).catch(e => console.error(e));
+        }
+      }
+    });
+
+    toggleMediaUI(type, true);
+  } catch (err) { alert('請確保已給予鏡頭/麥克風權限：' + err.message); }
+};
+
+// 2. 切換前後鏡頭 (不中斷 WebRTC 串流)
+window.switchCamera = async function() {
+  if (!localStream) return;
+  currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
+
+  try {
+    const oldVideoTrack = localStream.getVideoTracks()[0];
+    const newStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: currentFacingMode } }
+    });
+    const newVideoTrack = newStream.getVideoTracks()[0];
+
+    // 替換本地流中的視訊軌道
+    if (oldVideoTrack) {
+      localStream.removeTrack(oldVideoTrack);
+      oldVideoTrack.stop();
+    }
+    localStream.addTrack(newVideoTrack);
+
+    // 更新本地預覽畫面
+    document.getElementById('local-preview').srcObject = localStream;
+
+    // 透過 replaceTrack 無縫替換送到大屏的 WebRTC 畫面
+    if (peerConnection) {
+      const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (sender) sender.replaceTrack(newVideoTrack);
+    }
+  } catch (err) {
+    alert('無法切換鏡頭：' + err.message);
+  }
+};
+
+// 3. 切換麥克風開關 (預設靜音 ➔ 點擊開啟)
+window.toggleCamMic = function() {
+  if (!localStream) return;
+  const audioTrack = localStream.getAudioTracks()[0];
+  if (audioTrack) {
+    isCamMicEnabled = !isCamMicEnabled;
+    audioTrack.enabled = isCamMicEnabled;
+    const btn = document.getElementById('cam-mic-btn');
+    btn.innerText = isCamMicEnabled ? '🎙️' : '🔇';
+    btn.style.background = isCamMicEnabled ? '#34c759' : '#8e8e93';
+  }
+};
+
+// 4. 邊投屏邊錄影功能 (手機端錄影並下載)
+let currentSegmentIndex = 1;
+
+// 開啟/停止錄影
+window.toggleCameraRecording = function() {
+  if (!localStream) return;
+
+  const recBtn = document.getElementById('cam-record-btn');
+  const splitBtn = document.getElementById('cam-split-btn');
+
+  if (!isRecording) {
+    currentSegmentIndex = 1;
+    startNewRecorderSegment();
+    isRecording = true;
+
+    recBtn.innerText = '⏹️';
+    recBtn.style.background = '#ff3b30';
+    splitBtn.style.display = 'block'; // 顯示分段按鈕
+  } else {
+    stopCurrentRecorder();
+    isRecording = false;
+
+    recBtn.innerText = '🔴';
+    recBtn.style.background = '#ff9500';
+    splitBtn.style.display = 'none';  // 隱藏分段按鈕
+  }
+};
+
+// ✂️ 無縫分段：儲存當前片段並自動開始下一段
+window.splitRecordingSegment = function() {
+  if (!isRecording || !mediaRecorder) return;
+  
+  // 停止目前片段（會觸發下載），並在完成後自動啟動下一段
+  stopCurrentRecorder(() => {
+    currentSegmentIndex++;
+    startNewRecorderSegment();
+  });
+};
+
+// 內部函式：啟動新的錄製片段
+function startNewRecorderSegment() {
+  recordedChunks = [];
+  try {
+    const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
+    mediaRecorder = new MediaRecorder(localStream, { mimeType });
+  } catch (e) {
+    mediaRecorder = new MediaRecorder(localStream);
+  }
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+  };
+
+  const segNum = currentSegmentIndex; // 鎖定目前片段編號
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/mp4' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `camera-record-segment${segNum}-${Date.now()}.mp4`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  mediaRecorder.start(1000);
+}
+
+// 內部函式：停止當前錄製
+function stopCurrentRecorder(callback) {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    if (callback) {
+      // 若有續接下一段的 callback，等 stop 完成後執行
+      const originalOnStop = mediaRecorder.onstop;
+      mediaRecorder.onstop = (e) => {
+        if (originalOnStop) originalOnStop(e);
+        callback();
+      };
+    }
+    mediaRecorder.stop();
+  }
+}
 
     window.stopWebRTC = function() {
       closePeerConnection();
@@ -599,7 +1261,7 @@
       document.getElementById('live-draw-canvas').style.pointerEvents = 'none';
 
       toggleMediaUI('camera', false);
-      toggleMediaUI('mic', false);
+      // toggleMediaUI('mic', false);
     };
 
     window.pushSnapshotToScreen = function() {
@@ -661,18 +1323,35 @@
     };
 
     window.selectPen = function(color) {
-      isEraserMode = false;
-      currentColor = color;
-      document.getElementById('eraser-btn').classList.remove('active');
-      document.getElementById('live-eraser-btn').classList.remove('active');
-    };
+  isEraserMode = false;
+  currentColor = color;
+  
+  const eraserBtn = document.getElementById('eraser-btn');
+  const fsEraserBtn = document.getElementById('fs-eraser-btn');
+  const liveEraserBtn = document.getElementById('live-eraser-btn');
 
-    window.toggleEraser = function() {
-      isEraserMode = !isEraserMode;
-      document.getElementById('eraser-btn').classList.toggle('active', isEraserMode);
-      document.getElementById('live-eraser-btn').classList.toggle('active', isEraserMode);
-    };
+  if (eraserBtn) eraserBtn.classList.remove('active');
+  if (liveEraserBtn) liveEraserBtn.classList.remove('active');
+  if (fsEraserBtn) fsEraserBtn.style.background = '#555';
+};
 
+   window.toggleEraser = function() {
+  isEraserMode = !isEraserMode;
+  
+  // 同步一般模式、全螢幕模式、實時鏡頭模式的橡皮擦狀態
+  const eraserBtn = document.getElementById('eraser-btn');
+  const fsEraserBtn = document.getElementById('fs-eraser-btn');
+  const liveEraserBtn = document.getElementById('live-eraser-btn');
+
+  if (eraserBtn) eraserBtn.classList.toggle('active', isEraserMode);
+  if (liveEraserBtn) liveEraserBtn.classList.toggle('active', isEraserMode);
+  
+  if (fsEraserBtn) {
+    fsEraserBtn.style.background = isEraserMode ? '#ff9500' : '#555';
+  }
+};
+
+    // 畫布塗鴉雙向同步
     const pad = document.getElementById('draw-pad');
     const pCtx = pad.getContext('2d');
     const liveCanvas = document.getElementById('live-draw-canvas');
@@ -733,6 +1412,7 @@
     liveCanvas.addEventListener('mousemove', e => handleMove(e, lCtx, liveCanvas));
     liveCanvas.addEventListener('mouseup', handleEnd);
 
+    // 接收大屏端畫筆筆跡（雙向同步）
     const screenId = getScreenId();
     if (screenId) {
       onChildAdded(ref(db, `screens/${screenId}/drawEvents`), (snapshot) => {
@@ -775,8 +1455,8 @@
     }
 
     function toggleMediaUI(type, isRunning) {
-      const startBtn = document.getElementById(type === 'camera' ? 'cam-start-btn' : 'mic-start-btn');
-      const stopBtn = document.getElementById(type === 'camera' ? 'cam-stop-btn' : 'mic-stop-btn');
+      const startBtn = document.getElementById(type === 'camera' ? 'cam-start-btn' : null);
+      const stopBtn = document.getElementById(type === 'camera' ? 'cam-stop-btn' : null);
       if (startBtn) startBtn.style.display = isRunning ? 'none' : 'block';
       if (stopBtn) stopBtn.style.display = isRunning ? 'block' : 'none';
     }
@@ -796,6 +1476,494 @@
     });
   }
 };
+    let isDrawFullscreen = false;
+const fsPad = document.getElementById('fs-draw-pad');
+const fsCtx = fsPad.getContext('2d');
+
+// 1. 開啟全螢幕標註模式
+window.openDrawFullscreen = function() {
+  isDrawFullscreen = true;
+  document.getElementById('draw-fullscreen-overlay').style.display = 'block';
+  resizeFsDrawPad();
+  syncFsBackground();
+};
+
+// 2. 退出全螢幕標註模式
+window.closeDrawFullscreen = function() {
+  isDrawFullscreen = false;
+  document.getElementById('draw-fullscreen-overlay').style.display = 'none';
+  resizeDrawPad(); // 重新整理普通模式畫布
+};
+
+// 同步背景圖片至全螢幕畫布
+function syncFsBackground() {
+  const normalPad = document.getElementById('draw-pad');
+  fsPad.style.backgroundImage = normalPad.style.backgroundImage;
+}
+
+// 調整全螢幕畫布尺寸
+function resizeFsDrawPad() {
+  fsPad.width = window.innerWidth;
+  fsPad.height = window.innerHeight;
+}
+
+// 修改原有的 setPadBackground 讓全螢幕模式同步更新背景圖片
+const originalSetPadBackground = window.setPadBackground;
+window.setPadBackground = function(url) {
+  const pad = document.getElementById('draw-pad');
+  if (url) {
+    pad.style.backgroundImage = `url(${url})`;
+    fsPad.style.backgroundImage = `url(${url})`;
+    document.getElementById('draw-status-label').innerText = '📸 已載入內容，請直接在上方圈寫標註：';
+  } else {
+    pad.style.backgroundImage = 'none';
+    fsPad.style.backgroundImage = 'none';
+    document.getElementById('draw-status-label').innerText = '在下方畫布上手指滑動，大屏同步繪製：';
+  }
+};
+
+// 綁定全螢幕畫布觸控與繪圖事件
+fsPad.addEventListener('touchstart', e => handleStart(e, fsPad));
+fsPad.addEventListener('touchmove', e => handleMove(e, fsCtx, fsPad));
+fsPad.addEventListener('touchend', handleEnd);
+fsPad.addEventListener('mousedown', e => handleStart(e, fsPad));
+fsPad.addEventListener('mousemove', e => handleMove(e, fsCtx, fsPad));
+fsPad.addEventListener('mouseup', handleEnd);
+
+// 大屏或手機繪圖同步至全螢幕畫布
+if (screenId) {
+  onChildAdded(ref(db, `screens/${screenId}/drawEvents`), (snapshot) => {
+    const d = snapshot.val();
+    if (d) {
+      // 繪製至全螢幕 Canvas
+      fsCtx.beginPath();
+      fsCtx.moveTo(d.x0 * fsPad.width, d.y0 * fsPad.height);
+      fsCtx.lineTo(d.x1 * fsPad.width, d.y1 * fsPad.height);
+      if (d.isEraser) {
+        fsCtx.globalCompositeOperation = 'destination-out';
+        fsCtx.lineWidth = d.size || 20;
+      } else {
+        fsCtx.globalCompositeOperation = 'source-over';
+        fsCtx.strokeStyle = d.color;
+        fsCtx.lineWidth = d.size || 4;
+      }
+      fsCtx.lineCap = 'round'; fsCtx.stroke();
+      fsCtx.globalCompositeOperation = 'source-over';
+    }
+  });
+
+  onValue(ref(db, `screens/${screenId}/drawEvents`), (snapshot) => {
+    if (!snapshot.exists()) {
+      fsCtx.clearRect(0, 0, fsPad.width, fsPad.height);
+    }
+  });
+}
+  
+    // ==========================================
+    // 📁 雙向 P2P 檔案傳輸模組 (WebRTC DataChannel)
+    // ==========================================
+    let mobileSelectedFiles = [];
+    let mobileReceivedFiles = [];
+    let ftPeerConnection = null;
+    let ftDataChannel = null;
+    let ftIceCandidateQueue = [];
+    let isFtConnecting = false;
+    let ftAnswerListener = null;
+    let ftCalleeListener = null;
+    let ftIncomingFile = null;
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+    }
+
+    window.handleMobileFilesSelect = function(files) {
+      if (!files || files.length === 0) return;
+      mobileSelectedFiles = Array.from(files);
+      renderMobileSelectedFiles();
+    };
+
+    function renderMobileSelectedFiles() {
+      const box = document.getElementById('mobile-selected-files-box');
+      const list = document.getElementById('mobile-selected-files-list');
+      const summary = document.getElementById('mobile-selected-summary');
+      const sendBtn = document.getElementById('mobile-send-btn');
+
+      if (mobileSelectedFiles.length === 0) {
+        box.style.display = 'none';
+        sendBtn.disabled = true;
+        return;
+      }
+
+      box.style.display = 'block';
+      sendBtn.disabled = false;
+      const totalBytes = mobileSelectedFiles.reduce((acc, f) => acc + f.size, 0);
+      summary.innerText = `已選擇 ${mobileSelectedFiles.length} 個檔案 (共 ${formatBytes(totalBytes)})`;
+
+      list.innerHTML = mobileSelectedFiles.map((f, idx) => `
+        <div class="ft-file-item">
+          <span class="ft-file-name" title="${f.name}">📄 ${f.name}</span>
+          <span class="ft-file-size">${formatBytes(f.size)}</span>
+        </div>
+      `).join('');
+    }
+
+    window.clearMobileSelectedFiles = function() {
+      mobileSelectedFiles = [];
+      document.getElementById('mobile-ft-input').value = '';
+      renderMobileSelectedFiles();
+    };
+
+    function updateMobileFtStatus(status, text) {
+      const badge = document.getElementById('mobile-ft-status');
+      if (!badge) return;
+      if (status === 'connected') {
+        badge.innerHTML = `<span style="color:#34c759;">🟢 通道已連線</span>`;
+      } else if (status === 'connecting') {
+        badge.innerHTML = `<span style="color:#ff9500;">🟡 連線握手中...</span>`;
+      } else {
+        badge.innerHTML = `<span style="color:#8e8e93;">⚪ 待命</span>`;
+      }
+    }
+
+    // 建立/確保檔案傳輸通道連線 (由手機作為 Caller)
+    window.ensureMobileFtConnection = async function(userTriggered = false) {
+      const screenId = getScreenId();
+      if (!screenId) return false;
+
+      if (ftDataChannel && ftDataChannel.readyState === 'open') {
+        updateMobileFtStatus('connected');
+        if (userTriggered) alert('大屏檔案傳輸通道已在連線狀態！');
+        return true;
+      }
+
+      if (isFtConnecting) return false;
+      isFtConnecting = true;
+      updateMobileFtStatus('connecting');
+
+      try {
+        if (ftPeerConnection) {
+          try { ftPeerConnection.close(); } catch(e){}
+          ftPeerConnection = null;
+        }
+
+        ftPeerConnection = new RTCPeerConnection(rtcConfig);
+        ftIceCandidateQueue = [];
+
+        ftDataChannel = ftPeerConnection.createDataChannel('screenPusherFtChannel');
+        setupMobileFtDataChannel(ftDataChannel);
+
+        ftPeerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            push(ref(db, `screens/${screenId}/fileTransfer/callerCandidates`), event.candidate.toJSON());
+          }
+        };
+
+        if (ftCalleeListener) off(ftCalleeListener);
+        ftCalleeListener = ref(db, `screens/${screenId}/fileTransfer/calleeCandidates`);
+        onChildAdded(ftCalleeListener, (snap) => {
+          const val = snap.val();
+          if (val && ftPeerConnection) {
+            const cand = new RTCIceCandidate(val);
+            if (ftPeerConnection.remoteDescription) {
+              ftPeerConnection.addIceCandidate(cand).catch(e => console.warn(e));
+            } else {
+              ftIceCandidateQueue.push(cand);
+            }
+          }
+        });
+
+        // 建立 Offer
+        const offer = await ftPeerConnection.createOffer();
+        await ftPeerConnection.setLocalDescription(offer);
+
+        // 清理舊資料並寫入 Offer
+        await remove(ref(db, `screens/${screenId}/fileTransfer/calleeCandidates`));
+        await remove(ref(db, `screens/${screenId}/fileTransfer/callerCandidates`));
+        await remove(ref(db, `screens/${screenId}/fileTransfer/answer`));
+        await set(ref(db, `screens/${screenId}/fileTransfer/offer`), {
+          sdp: offer.sdp,
+          type: offer.type,
+          timestamp: Date.now()
+        });
+
+        // 監聽 Answer
+        if (ftAnswerListener) off(ftAnswerListener);
+        ftAnswerListener = ref(db, `screens/${screenId}/fileTransfer/answer`);
+        onValue(ftAnswerListener, async (snap) => {
+          const ans = snap.val();
+          if (ans && ftPeerConnection && ftPeerConnection.signalingState !== 'stable') {
+            await ftPeerConnection.setRemoteDescription(new RTCSessionDescription(ans)).catch(e => console.error(e));
+            while (ftIceCandidateQueue.length > 0) {
+              const cand = ftIceCandidateQueue.shift();
+              await ftPeerConnection.addIceCandidate(cand).catch(e => console.warn(e));
+            }
+          }
+        });
+
+        return true;
+      } catch (err) {
+        console.error("建立檔案通道失敗:", err);
+        updateMobileFtStatus('error');
+        isFtConnecting = false;
+        return false;
+      }
+    };
+
+    function setupMobileFtDataChannel(dc) {
+      dc.binaryType = 'arraybuffer';
+
+      dc.onopen = () => {
+        isFtConnecting = false;
+        updateMobileFtStatus('connected');
+        console.log("手機端檔案 DataChannel 已開啟！");
+      };
+
+      dc.onclose = () => {
+        updateMobileFtStatus('disconnected');
+        console.log("手機端檔案 DataChannel 已關閉");
+      };
+
+      dc.onerror = (err) => {
+        console.error("手機端 DataChannel 錯誤:", err);
+      };
+
+      // 接收來自大屏的檔案
+      dc.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'file-meta') {
+              ftIncomingFile = {
+                name: msg.name,
+                size: msg.size,
+                mime: msg.mime,
+                index: msg.index,
+                total: msg.total,
+                bytes: 0,
+                chunks: []
+              };
+              showMobileRecvProgress(true, `正在接收來自大屏第 ${msg.index}/${msg.total} 個檔案: ${msg.name}`, 0);
+            } else if (msg.type === 'file-done') {
+              if (ftIncomingFile) {
+                const blob = new Blob(ftIncomingFile.chunks, { type: ftIncomingFile.mime || 'application/octet-stream' });
+                const item = {
+                  name: ftIncomingFile.name,
+                  size: ftIncomingFile.size,
+                  url: URL.createObjectURL(blob),
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                };
+                mobileReceivedFiles.push(item);
+                renderMobileReceivedFiles();
+                ftIncomingFile = null;
+              }
+            } else if (msg.type === 'batch-done') {
+              showMobileRecvProgress(false);
+              alert(`🎉 成功接收來自大屏的 ${msg.total} 個檔案！`);
+            }
+          } catch(e) {
+            console.error("解析訊息失敗", e);
+          }
+        } else if (event.data instanceof ArrayBuffer) {
+          if (ftIncomingFile) {
+            ftIncomingFile.chunks.push(event.data);
+            ftIncomingFile.bytes += event.data.byteLength;
+            const pct = Math.min(100, Math.round((ftIncomingFile.bytes / ftIncomingFile.size) * 100));
+            showMobileRecvProgress(true, `正在接收 (${ftIncomingFile.index}/${ftIncomingFile.total})：${ftIncomingFile.name} (${pct}%)`, pct);
+          }
+        }
+      };
+    }
+
+    function showMobileRecvProgress(show, text = '', pct = 0) {
+      const box = document.getElementById('mobile-recv-progress-box');
+      const txt = document.getElementById('mobile-recv-status-text');
+      const bar = document.getElementById('mobile-recv-bar');
+      box.style.display = show ? 'block' : 'none';
+      if (show) {
+        txt.innerText = text;
+        bar.style.width = pct + '%';
+      }
+    }
+
+    function renderMobileReceivedFiles() {
+      const list = document.getElementById('mobile-received-files-list');
+      const allBtn = document.getElementById('mobile-download-all-btn');
+      if (mobileReceivedFiles.length === 0) {
+        list.innerHTML = `<p style="color: #999; font-size: 0.85rem; text-align: center; margin: 12px 0;">目前尚無接收到的檔案</p>`;
+        allBtn.style.display = 'none';
+        return;
+      }
+
+      allBtn.style.display = 'inline-block';
+      list.innerHTML = mobileReceivedFiles.map((f, i) => `
+        <div class="ft-file-item">
+          <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:65%;">
+            <div style="font-weight:bold; overflow:hidden; text-overflow:ellipsis;">📄 ${f.name}</div>
+            <div style="font-size:0.75rem; color:#888;">${formatBytes(f.size)} • ${f.time}</div>
+          </div>
+          <a class="ft-download-btn" href="${f.url}" download="${f.name}">📥 下載</a>
+        </div>
+      `).join('');
+    }
+
+    window.downloadAllMobileReceived = function() {
+      if (mobileReceivedFiles.length === 0) return;
+      mobileReceivedFiles.forEach((f, idx) => {
+        setTimeout(() => {
+          const a = document.createElement('a');
+          a.href = f.url;
+          a.download = f.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }, idx * 300);
+      });
+    };
+
+    window.clearMobileReceivedFiles = function() {
+      if (confirm('確定要清空已接收的檔案紀錄嗎？')) {
+        mobileReceivedFiles.forEach(f => URL.revokeObjectURL(f.url));
+        mobileReceivedFiles = [];
+        renderMobileReceivedFiles();
+      }
+    };
+
+    // 發送選取的檔案給大屏 (支援複數檔案，分塊發送與背壓控制)
+    window.sendMobileFiles = async function() {
+      if (mobileSelectedFiles.length === 0) return;
+      const screenId = getScreenId();
+      if (!screenId) return;
+
+      const progressBox = document.getElementById('mobile-send-progress-box');
+      const statusText = document.getElementById('mobile-send-status-text');
+      const progressBar = document.getElementById('mobile-send-bar');
+      const sendBtn = document.getElementById('mobile-send-btn');
+
+      // 檢查連線
+      if (!ftDataChannel || ftDataChannel.readyState !== 'open') {
+        statusText.innerText = '⏳ 正在與大屏建立點對點加密通道...';
+        progressBox.style.display = 'block';
+        sendBtn.disabled = true;
+
+        await ensureMobileFtConnection();
+
+        // 等待 DataChannel 開啟 (最多等 8 秒)
+        let waited = 0;
+        while ((!ftDataChannel || ftDataChannel.readyState !== 'open') && waited < 80) {
+          await new Promise(r => setTimeout(r, 100));
+          waited++;
+        }
+
+        if (!ftDataChannel || ftDataChannel.readyState !== 'open') {
+          alert('無法與大屏建立點對點傳輸通道，請確保大屏處於開啟狀態並已配對相同 PIN 碼！');
+          progressBox.style.display = 'none';
+          sendBtn.disabled = false;
+          return;
+        }
+      }
+
+      sendBtn.disabled = true;
+      progressBox.style.display = 'block';
+
+      const totalFiles = mobileSelectedFiles.length;
+      const totalBytes = mobileSelectedFiles.reduce((acc, f) => acc + f.size, 0);
+      let sentOverallBytes = 0;
+      const CHUNK_SIZE = 64 * 1024; // 64KB
+
+      try {
+        for (let i = 0; i < totalFiles; i++) {
+          const file = mobileSelectedFiles[i];
+
+          // 1. 發送檔案 meta
+          ftDataChannel.send(JSON.stringify({
+            type: 'file-meta',
+            name: file.name,
+            size: file.size,
+            mime: file.type || 'application/octet-stream',
+            index: i + 1,
+            total: totalFiles
+          }));
+
+          // 2. 分塊發送
+          let offset = 0;
+          while (offset < file.size) {
+            // 背壓控制 (如果緩衝大於 8MB 則暫停)
+            if (ftDataChannel.bufferedAmount > 8 * 1024 * 1024) {
+              await new Promise(r => setTimeout(r, 40));
+              continue;
+            }
+
+            const slice = file.slice(offset, offset + CHUNK_SIZE);
+            const arrayBuffer = await slice.arrayBuffer();
+            ftDataChannel.send(arrayBuffer);
+
+            offset += arrayBuffer.byteLength;
+            sentOverallBytes += arrayBuffer.byteLength;
+
+            const filePct = Math.min(100, Math.round((offset / file.size) * 100));
+            const overallPct = Math.min(100, Math.round((sentOverallBytes / totalBytes) * 100));
+
+            statusText.innerText = `傳送中 (${i + 1}/${totalFiles})：${file.name} [${filePct}%]`;
+            progressBar.style.width = overallPct + '%';
+          }
+
+          // 3. 單檔傳送結束
+          ftDataChannel.send(JSON.stringify({
+            type: 'file-done',
+            name: file.name,
+            index: i + 1,
+            total: totalFiles
+          }));
+        }
+
+        // 4. 整批傳送結束
+        ftDataChannel.send(JSON.stringify({
+          type: 'batch-done',
+          total: totalFiles
+        }));
+
+        statusText.innerText = `✅ 全部 ${totalFiles} 個檔案已全數成功傳送至大屏！`;
+        progressBar.style.width = '100%';
+        setTimeout(() => {
+          clearMobileSelectedFiles();
+          progressBox.style.display = 'none';
+          sendBtn.disabled = false;
+        }, 1500);
+
+      } catch (err) {
+        console.error("傳送檔案出錯:", err);
+        alert('傳送過程中發生錯誤：' + err.message);
+        progressBox.style.display = 'none';
+        sendBtn.disabled = false;
+      }
+    };
+
+    // 監聽大屏傳送請求 (若大屏想傳檔案給手機，自動打通通道)
+    function listenToScreenFtRequests() {
+      const screenId = getScreenId();
+      if (!screenId) return;
+      const ftReqRef = ref(db, `screens/${screenId}/fileTransfer/request`);
+      onValue(ftReqRef, (snap) => {
+        const val = snap.val();
+        if (val && val.timestamp) {
+          console.log("偵測到大屏端請求檔案傳輸連線，自動打通通道...");
+          ensureMobileFtConnection();
+        }
+      });
+    }
+
+    // 當切換到檔案傳輸頁籤時自動嘗試握手連線
+    const originalSwitchTab = window.switchTab;
+    window.switchTab = function(tabId, btn) {
+      originalSwitchTab(tabId, btn);
+      if (tabId === 'file-tab') {
+        ensureMobileFtConnection();
+      }
+    };
+
   </script>
 </body>
 </html>
