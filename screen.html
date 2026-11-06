@@ -4,424 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>大屏多功能接收端</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js">
-    // ==========================================
-    // 📁 大屏端雙向 P2P 檔案傳輸模組 (WebRTC DataChannel)
-    // ==========================================
-    let sftPeerConnection = null;
-    let sftDataChannel = null;
-    let sftIceCandidateQueue = [];
-    let sftSelectedFiles = [];
-    let sftReceivedFiles = [];
-    let sftIncomingFile = null;
-    let sftUnreadCount = 0;
-    let sftCallerCandidatesListener = null;
-
-    function formatBytesScreen(bytes) {
-      if (bytes === 0) return '0 B';
-      const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
-    }
-
-    window.toggleScreenFtModal = function(show) {
-      const modal = document.getElementById('screen-ft-modal');
-      const shouldShow = (typeof show === 'boolean') ? show : (modal.style.display !== 'flex');
-      modal.style.display = shouldShow ? 'flex' : 'none';
-      if (shouldShow) {
-        // 清除未讀通知
-        sftUnreadCount = 0;
-        updateScreenFtBadge();
-        const toast = document.getElementById('screen-ft-toast');
-        toast.style.display = 'none';
-      }
-    };
-
-    window.handleScreenFtBackdrop = function(e) {
-      if (e.target.id === 'screen-ft-modal') {
-        toggleScreenFtModal(false);
-      }
-    };
-
-    function updateScreenFtBadge() {
-      const badge = document.getElementById('screen-ft-badge');
-      if (sftUnreadCount > 0) {
-        badge.innerText = sftUnreadCount;
-        badge.style.display = 'inline-block';
-      } else {
-        badge.style.display = 'none';
-      }
-    }
-
-    function showScreenFtToast(text) {
-      const toast = document.getElementById('screen-ft-toast');
-      toast.innerText = text;
-      toast.style.display = 'block';
-      clearTimeout(window._sftToastTimer);
-      window._sftToastTimer = setTimeout(() => {
-        toast.style.display = 'none';
-      }, 5000);
-    }
-
-    function updateScreenFtStatus(status) {
-      const el = document.getElementById('screen-ft-status-text');
-      if (!el) return;
-      if (status === 'connected') {
-        el.innerHTML = `<span style="color:#34c759;">🟢 通道已連線</span>`;
-      } else if (status === 'connecting') {
-        el.innerHTML = `<span style="color:#ff9500;">🟡 連線中...</span>`;
-      } else {
-        el.innerHTML = `<span style="color:#aaa;">⚪ 待命</span>`;
-      }
-    }
-
-    // 監聽手機端的 Offer (大屏作為 Callee)
-    function initScreenFileTransferSignaling() {
-      const offerRef = ref(db, `screens/${screenId}/fileTransfer/offer`);
-      let lastOfferTime = 0;
-
-      onValue(offerRef, async (snapshot) => {
-        const val = snapshot.val();
-        if (!val || !val.sdp || val.timestamp <= lastOfferTime) return;
-        lastOfferTime = val.timestamp;
-
-        console.log("大屏端收到手機檔案傳輸 Offer:", val);
-        updateScreenFtStatus('connecting');
-
-        try {
-          if (sftPeerConnection) {
-            try { sftPeerConnection.close(); } catch(e){}
-            sftPeerConnection = null;
-          }
-
-          sftPeerConnection = new RTCPeerConnection(rtcConfig);
-          sftIceCandidateQueue = [];
-
-          sftPeerConnection.ondatachannel = (event) => {
-            console.log("大屏端收到 DataChannel:", event.channel.label);
-            sftDataChannel = event.channel;
-            setupScreenFtDataChannel(sftDataChannel);
-          };
-
-          sftPeerConnection.onicecandidate = (event) => {
-            if (event.candidate) {
-              push(ref(db, `screens/${screenId}/fileTransfer/calleeCandidates`), event.candidate.toJSON());
-            }
-          };
-
-          if (sftCallerCandidatesListener) off(sftCallerCandidatesListener);
-          sftCallerCandidatesListener = ref(db, `screens/${screenId}/fileTransfer/callerCandidates`);
-          onChildAdded(sftCallerCandidatesListener, (snap) => {
-            const candVal = snap.val();
-            if (candVal && sftPeerConnection) {
-              const cand = new RTCIceCandidate(candVal);
-              if (sftPeerConnection.remoteDescription) {
-                sftPeerConnection.addIceCandidate(cand).catch(e => console.warn(e));
-              } else {
-                sftIceCandidateQueue.push(cand);
-              }
-            }
-          });
-
-          await sftPeerConnection.setRemoteDescription(new RTCSessionDescription(val));
-          while (sftIceCandidateQueue.length > 0) {
-            const cand = sftIceCandidateQueue.shift();
-            await sftPeerConnection.addIceCandidate(cand).catch(e => console.warn(e));
-          }
-
-          const answer = await sftPeerConnection.createAnswer();
-          await sftPeerConnection.setLocalDescription(answer);
-
-          await set(ref(db, `screens/${screenId}/fileTransfer/answer`), {
-            sdp: answer.sdp,
-            type: answer.type,
-            timestamp: Date.now()
-          });
-
-        } catch (err) {
-          console.error("大屏處理檔案 Offer 失敗:", err);
-          updateScreenFtStatus('error');
-        }
-      });
-    }
-
-    function setupScreenFtDataChannel(dc) {
-      dc.binaryType = 'arraybuffer';
-
-      dc.onopen = () => {
-        updateScreenFtStatus('connected');
-        console.log("大屏端 DataChannel 已開啟！");
-        if (sftSelectedFiles.length > 0) {
-          document.getElementById('screen-send-btn').disabled = false;
-        }
-      };
-
-      dc.onclose = () => {
-        updateScreenFtStatus('disconnected');
-        console.log("大屏端 DataChannel 已關閉");
-      };
-
-      dc.onerror = (e) => console.error("大屏端 DataChannel 錯誤:", e);
-
-      // 接收來自手機的檔案
-      dc.onmessage = (event) => {
-        if (typeof event.data === 'string') {
-          try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'file-meta') {
-              sftIncomingFile = {
-                name: msg.name,
-                size: msg.size,
-                mime: msg.mime,
-                index: msg.index,
-                total: msg.total,
-                bytes: 0,
-                chunks: []
-              };
-              showScreenRecvProgress(true, `正在接收來自手機 (${msg.index}/${msg.total})：${msg.name}`, 0);
-              showScreenFtToast(`📥 正在接收來自手機的檔案：${msg.name}...`);
-            } else if (msg.type === 'file-done') {
-              if (sftIncomingFile) {
-                const blob = new Blob(sftIncomingFile.chunks, { type: sftIncomingFile.mime || 'application/octet-stream' });
-                const item = {
-                  name: sftIncomingFile.name,
-                  size: sftIncomingFile.size,
-                  url: URL.createObjectURL(blob),
-                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                };
-                sftReceivedFiles.push(item);
-                sftUnreadCount++;
-                updateScreenFtBadge();
-                renderScreenReceivedFiles();
-                showScreenFtToast(`✅ 成功收到檔案：${sftIncomingFile.name} (點此開啟下載)`);
-                sftIncomingFile = null;
-              }
-            } else if (msg.type === 'batch-done') {
-              showScreenRecvProgress(false);
-              showScreenFtToast(`🎉 來自手機的 ${msg.total} 個檔案已全數接收完成！`);
-            }
-          } catch (e) {
-            console.error("大屏解析檔案訊息出錯:", e);
-          }
-        } else if (event.data instanceof ArrayBuffer) {
-          if (sftIncomingFile) {
-            sftIncomingFile.chunks.push(event.data);
-            sftIncomingFile.bytes += event.data.byteLength;
-            const pct = Math.min(100, Math.round((sftIncomingFile.bytes / sftIncomingFile.size) * 100));
-            showScreenRecvProgress(true, `接收中 (${sftIncomingFile.index}/${sftIncomingFile.total})：${sftIncomingFile.name} [${pct}%]`, pct);
-          }
-        }
-      };
-    }
-
-    function showScreenRecvProgress(show, text = '', pct = 0) {
-      const box = document.getElementById('screen-recv-progress-box');
-      const txt = document.getElementById('screen-recv-status-text');
-      const bar = document.getElementById('screen-recv-bar');
-      box.style.display = show ? 'block' : 'none';
-      if (show) {
-        txt.innerText = text;
-        bar.style.width = pct + '%';
-      }
-    }
-
-    function renderScreenReceivedFiles() {
-      const list = document.getElementById('screen-received-list');
-      const allBtn = document.getElementById('screen-download-all-btn');
-      if (sftReceivedFiles.length === 0) {
-        list.innerHTML = `<p style="color:#777; font-size:0.85rem; text-align:center; margin:14px 0;">目前尚無接收到的檔案</p>`;
-        allBtn.style.display = 'none';
-        return;
-      }
-
-      allBtn.style.display = 'inline-block';
-      list.innerHTML = sftReceivedFiles.map(f => `
-        <div class="sft-file-row">
-          <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:68%;">
-            <div style="font-weight:bold; overflow:hidden; text-overflow:ellipsis;">📄 ${f.name}</div>
-            <div style="font-size:0.75rem; color:#aaa;">${formatBytesScreen(f.size)} • ${f.time}</div>
-          </div>
-          <a class="sft-download-link" href="${f.url}" download="${f.name}">📥 下載</a>
-        </div>
-      `).join('');
-    }
-
-    window.downloadAllScreenReceived = function() {
-      if (sftReceivedFiles.length === 0) return;
-      sftReceivedFiles.forEach((f, idx) => {
-        setTimeout(() => {
-          const a = document.createElement('a');
-          a.href = f.url;
-          a.download = f.name;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-        }, idx * 300);
-      });
-    };
-
-    window.clearScreenReceivedFiles = function() {
-      if (confirm('確定要清空已接收的檔案清單嗎？')) {
-        sftReceivedFiles.forEach(f => URL.revokeObjectURL(f.url));
-        sftReceivedFiles = [];
-        sftUnreadCount = 0;
-        updateScreenFtBadge();
-        renderScreenReceivedFiles();
-      }
-    };
-
-    // 大屏端選擇檔案
-    window.handleScreenFilesSelect = function(files) {
-      if (!files || files.length === 0) return;
-      sftSelectedFiles = Array.from(files);
-      renderScreenSelectedFiles();
-    };
-
-    function renderScreenSelectedFiles() {
-      const box = document.getElementById('screen-selected-box');
-      const list = document.getElementById('screen-selected-list');
-      const summary = document.getElementById('screen-selected-summary');
-      const sendBtn = document.getElementById('screen-send-btn');
-
-      if (sftSelectedFiles.length === 0) {
-        box.style.display = 'none';
-        sendBtn.disabled = true;
-        return;
-      }
-
-      box.style.display = 'block';
-      sendBtn.disabled = false;
-      const totalBytes = sftSelectedFiles.reduce((acc, f) => acc + f.size, 0);
-      summary.innerText = `已選擇 ${sftSelectedFiles.length} 個檔案 (共 ${formatBytesScreen(totalBytes)})`;
-
-      list.innerHTML = sftSelectedFiles.map(f => `
-        <div class="sft-file-row">
-          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:65%;">📄 ${f.name}</span>
-          <span style="color:#aaa; font-size:0.8rem;">${formatBytesScreen(f.size)}</span>
-        </div>
-      `).join('');
-    }
-
-    window.clearScreenSelectedFiles = function() {
-      sftSelectedFiles = [];
-      document.getElementById('screen-ft-input').value = '';
-      renderScreenSelectedFiles();
-    };
-
-    // 大屏端發送檔案至手機 (支援多檔、分塊發送與背壓控制)
-    window.sendScreenFiles = async function() {
-      if (sftSelectedFiles.length === 0) return;
-
-      const progressBox = document.getElementById('screen-send-progress-box');
-      const statusText = document.getElementById('screen-send-status-text');
-      const progressBar = document.getElementById('screen-send-bar');
-      const sendBtn = document.getElementById('screen-send-btn');
-
-      // 檢查連線；若未開啟，發送請求喚醒手機端連線
-      if (!sftDataChannel || sftDataChannel.readyState !== 'open') {
-        statusText.innerText = '⏳ 正在等待手機建立點對點加密通道...';
-        progressBox.style.display = 'block';
-        sendBtn.disabled = true;
-
-        // 寫入請求通知手機
-        await set(ref(db, `screens/${screenId}/fileTransfer/request`), {
-          timestamp: Date.now()
-        });
-
-        // 等待 DataChannel 開啟 (最多 10 秒)
-        let waited = 0;
-        while ((!sftDataChannel || sftDataChannel.readyState !== 'open') && waited < 100) {
-          await new Promise(r => setTimeout(r, 100));
-          waited++;
-        }
-
-        if (!sftDataChannel || sftDataChannel.readyState !== 'open') {
-          alert('無法與手機建立點對點連線！請確認手機端已開啟【傳屏遙控器】並輸入相應 PIN 碼。');
-          progressBox.style.display = 'none';
-          sendBtn.disabled = false;
-          return;
-        }
-      }
-
-      sendBtn.disabled = true;
-      progressBox.style.display = 'block';
-
-      const totalFiles = sftSelectedFiles.length;
-      const totalBytes = sftSelectedFiles.reduce((acc, f) => acc + f.size, 0);
-      let sentOverallBytes = 0;
-      const CHUNK_SIZE = 64 * 1024; // 64KB
-
-      try {
-        for (let i = 0; i < totalFiles; i++) {
-          const file = sftSelectedFiles[i];
-
-          // 1. 發送 meta
-          sftDataChannel.send(JSON.stringify({
-            type: 'file-meta',
-            name: file.name,
-            size: file.size,
-            mime: file.type || 'application/octet-stream',
-            index: i + 1,
-            total: totalFiles
-          }));
-
-          // 2. 分塊發送
-          let offset = 0;
-          while (offset < file.size) {
-            if (sftDataChannel.bufferedAmount > 8 * 1024 * 1024) {
-              await new Promise(r => setTimeout(r, 40));
-              continue;
-            }
-
-            const slice = file.slice(offset, offset + CHUNK_SIZE);
-            const arrayBuffer = await slice.arrayBuffer();
-            sftDataChannel.send(arrayBuffer);
-
-            offset += arrayBuffer.byteLength;
-            sentOverallBytes += arrayBuffer.byteLength;
-
-            const filePct = Math.min(100, Math.round((offset / file.size) * 100));
-            const overallPct = Math.min(100, Math.round((sentOverallBytes / totalBytes) * 100));
-
-            statusText.innerText = `傳送中 (${i + 1}/${totalFiles})：${file.name} [${filePct}%]`;
-            progressBar.style.width = overallPct + '%';
-          }
-
-          // 3. 單檔結束
-          sftDataChannel.send(JSON.stringify({
-            type: 'file-done',
-            name: file.name,
-            index: i + 1,
-            total: totalFiles
-          }));
-        }
-
-        // 4. 全部結束
-        sftDataChannel.send(JSON.stringify({
-          type: 'batch-done',
-          total: totalFiles
-        }));
-
-        statusText.innerText = `✅ 全部 ${totalFiles} 個檔案已全數成功傳送至手機！`;
-        progressBar.style.width = '100%';
-        setTimeout(() => {
-          clearScreenSelectedFiles();
-          progressBox.style.display = 'none';
-          sendBtn.disabled = false;
-        }, 1500);
-
-      } catch (err) {
-        console.error("大屏發送檔案出錯:", err);
-        alert('傳送過程中發生錯誤：' + err.message);
-        progressBox.style.display = 'none';
-        sendBtn.disabled = false;
-      }
-    };
-
-    // 啟動檔案傳輸信令監聽
-    initScreenFileTransferSignaling();
-
-  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body, html { width: 100%; height: 100%; overflow: hidden; font-family: sans-serif; background: #000; color: #fff; position: relative; }
@@ -472,7 +55,7 @@
     /* 📁 大屏檔案傳輸懸浮鈕與面板樣式 */
     #screen-ft-fab {
       position: fixed; bottom: 20px; left: 20px; z-index: 1000;
-      background: rgba(28, 28, 30, 0.85); color: #fff; border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(28, 28, 30, 0.88); color: #fff; border: 1px solid rgba(255,255,255,0.25);
       padding: 10px 18px; border-radius: 30px; font-weight: bold; font-size: 0.95rem;
       cursor: pointer; display: flex; align-items: center; gap: 6px;
       backdrop-filter: blur(12px); box-shadow: 0 4px 16px rgba(0,0,0,0.5);
@@ -1136,7 +719,6 @@ function setToolbarToMinimized() {
       const shouldShow = (typeof show === 'boolean') ? show : (modal.style.display !== 'flex');
       modal.style.display = shouldShow ? 'flex' : 'none';
       if (shouldShow) {
-        // 清除未讀通知
         sftUnreadCount = 0;
         updateScreenFtBadge();
         const toast = document.getElementById('screen-ft-toast');
@@ -1424,7 +1006,6 @@ function setToolbarToMinimized() {
       const progressBar = document.getElementById('screen-send-bar');
       const sendBtn = document.getElementById('screen-send-btn');
 
-      // 檢查連線；若未開啟，發送請求喚醒手機端連線
       if (!sftDataChannel || sftDataChannel.readyState !== 'open') {
         statusText.innerText = '⏳ 正在等待手機建立點對點加密通道...';
         progressBox.style.display = 'block';
@@ -1435,7 +1016,6 @@ function setToolbarToMinimized() {
           timestamp: Date.now()
         });
 
-        // 等待 DataChannel 開啟 (最多 10 秒)
         let waited = 0;
         while ((!sftDataChannel || sftDataChannel.readyState !== 'open') && waited < 100) {
           await new Promise(r => setTimeout(r, 100));
@@ -1443,7 +1023,7 @@ function setToolbarToMinimized() {
         }
 
         if (!sftDataChannel || sftDataChannel.readyState !== 'open') {
-          alert('無法與手機建立點對點連線！請確認手機端已開啟【傳屏遙控器】並輸入相應 PIN 碼。');
+          alert('無法建立傳輸通道！請確認手機端已開啟【傳屏遙控器】並輸入相應 PIN 碼。');
           progressBox.style.display = 'none';
           sendBtn.disabled = false;
           return;
@@ -1462,7 +1042,6 @@ function setToolbarToMinimized() {
         for (let i = 0; i < totalFiles; i++) {
           const file = sftSelectedFiles[i];
 
-          // 1. 發送 meta
           sftDataChannel.send(JSON.stringify({
             type: 'file-meta',
             name: file.name,
@@ -1472,7 +1051,6 @@ function setToolbarToMinimized() {
             total: totalFiles
           }));
 
-          // 2. 分塊發送
           let offset = 0;
           while (offset < file.size) {
             if (sftDataChannel.bufferedAmount > 8 * 1024 * 1024) {
@@ -1494,7 +1072,6 @@ function setToolbarToMinimized() {
             progressBar.style.width = overallPct + '%';
           }
 
-          // 3. 單檔結束
           sftDataChannel.send(JSON.stringify({
             type: 'file-done',
             name: file.name,
@@ -1503,7 +1080,6 @@ function setToolbarToMinimized() {
           }));
         }
 
-        // 4. 全部結束
         sftDataChannel.send(JSON.stringify({
           type: 'batch-done',
           total: totalFiles
@@ -1525,9 +1101,9 @@ function setToolbarToMinimized() {
       }
     };
 
-    // 啟動檔案傳輸信令監聽
+    // 啟動大屏檔案傳輸信令監聽
     initScreenFileTransferSignaling();
 
-  </script>
+</script>
 </body>
 </html>
