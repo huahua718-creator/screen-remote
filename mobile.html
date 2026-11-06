@@ -74,6 +74,20 @@
 </head>
 <body>
 
+  <!-- 🌟 大屏網頁推送 Toast 全局彈窗提示 -->
+  <div id="mobile-toast" style="display: none; position: fixed; top: 15px; left: 50%; transform: translateX(-50%); width: 92%; max-width: 420px; background: rgba(28, 28, 30, 0.96); color: #fff; padding: 14px 16px; border-radius: 14px; z-index: 99999; backdrop-filter: blur(12px); box-shadow: 0 8px 30px rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.18); box-sizing: border-box; animation: slideDown 0.3s ease;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+      <span style="font-weight: bold; font-size: 0.95rem; color: #4ade80; display: flex; align-items: center; gap: 4px;">🌐 收到大屏推送的網頁！</span>
+      <button onclick="document.getElementById('mobile-toast').style.display='none'" style="background: none; border: none; color: #9ca3af; font-size: 1.1rem; cursor: pointer; padding: 0 4px; line-height: 1;">✖</button>
+    </div>
+    <div id="mobile-toast-text" style="font-size: 0.85rem; color: #e5e7eb; margin-bottom: 10px; word-break: break-all; max-height: 48px; overflow: hidden; line-height: 1.4;"></div>
+    <div style="display: flex; gap: 8px;">
+      <button id="mobile-toast-open-btn" style="flex: 1; padding: 8px; background: #22c55e; color: white; border: none; border-radius: 8px; font-weight: bold; font-size: 0.85rem; cursor: pointer;" onclick="openLatestIncomingUrl()">🔗 立即開啟網頁</button>
+      <button onclick="document.getElementById('mobile-toast').style.display='none'" style="padding: 8px 14px; background: #374151; color: white; border: none; border-radius: 8px; font-size: 0.85rem; cursor: pointer;">稍後</button>
+    </div>
+  </div>
+
+
   <div style="padding: 5px;">
     <div class="card">
       <label for="room-input">大屏房間碼 (PIN)：</label>
@@ -103,6 +117,22 @@
 
       <button class="action-btn" onclick="sendUrl()">推送至大屏</button>
       <button style="width:100%; background:none; border:none; color:#8e8e93; font-size:0.75rem; margin-top:8px; cursor:pointer;" onclick="clearHistory()">清空歷史紀錄</button>
+      <!-- 🌟 接收自大屏的網頁推送卡片 -->
+      <div id="incoming-url-box" style="margin-top: 16px; padding: 12px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px; display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-weight: bold; color: #15803d; font-size: 0.9rem; display: flex; align-items: center; gap: 4px;">
+            🌐 來自大屏的網頁推送
+          </span>
+          <span id="incoming-url-time" style="font-size: 0.75rem; color: #6b7280;"></span>
+        </div>
+        <div id="incoming-url-title" style="font-size: 0.88rem; font-weight: bold; color: #1f2937; margin-bottom: 4px; word-break: break-all;"></div>
+        <div id="incoming-url-link" style="font-size: 0.8rem; color: #2563eb; margin-bottom: 10px; word-break: break-all;"></div>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="action-btn push-btn" style="flex: 1; padding: 8px; font-size: 0.85rem;" onclick="openLatestIncomingUrl()">🔗 開啟網頁</button>
+          <button type="button" class="action-btn" style="flex: 1; padding: 8px; font-size: 0.85rem; background: #6b7280;" onclick="copyLatestIncomingUrl()">📋 複製連結</button>
+        </div>
+      </div>
+
     </div>
 
     <!-- 2. 媒體與鏡頭頁籤 -->
@@ -311,7 +341,7 @@
 
     const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-    document.addEventListener('DOMContentLoaded', () => { loadHistory(); listenToPageRequests(); listenToScreenFtRequests(); });
+    document.addEventListener('DOMContentLoaded', () => { loadHistory(); listenToPageRequests(); listenToScreenFtRequests(); listenToIncomingUrlsFromScreen(); });
 
     // 監聽大屏傳來的翻頁要求
     window.listenToPageRequests = function() {
@@ -1548,6 +1578,73 @@ if (screenId) {
         ensureMobileFtConnection();
       }
     };
+
+
+    // ==========================================
+    // 🌐 監聽來自大屏的網頁推送 (網頁雙向推送)
+    // ==========================================
+    let latestIncomingUrl = null;
+    let lastHandledPushedUrlTime = 0;
+
+    window.openLatestIncomingUrl = function() {
+      if (latestIncomingUrl && latestIncomingUrl.url) {
+        window.open(latestIncomingUrl.url, '_blank');
+        const toast = document.getElementById('mobile-toast');
+        if (toast) toast.style.display = 'none';
+      }
+    };
+
+    window.copyLatestIncomingUrl = function() {
+      if (latestIncomingUrl && latestIncomingUrl.url) {
+        navigator.clipboard.writeText(latestIncomingUrl.url).then(() => {
+          alert('已成功複製網址到剪貼簿：' + latestIncomingUrl.url);
+        }).catch(() => {
+          prompt('請手動複製網址：', latestIncomingUrl.url);
+        });
+      }
+    };
+
+    function listenToIncomingUrlsFromScreen() {
+      const screenId = getScreenId();
+      if (!screenId) return;
+
+      const pushedUrlRef = ref(db, `screens/${screenId}/pushedUrlToMobile`);
+      onValue(pushedUrlRef, (snap) => {
+        const val = snap.val();
+        if (!val || !val.url) return;
+
+        // 若是新發送的網址 (timestamp 比上次處理的更新)
+        if (val.timestamp && val.timestamp > lastHandledPushedUrlTime) {
+          lastHandledPushedUrlTime = val.timestamp;
+          latestIncomingUrl = val;
+
+          // 更新網址分頁內的卡片資訊
+          const box = document.getElementById('incoming-url-box');
+          const titleEl = document.getElementById('incoming-url-title');
+          const linkEl = document.getElementById('incoming-url-link');
+          const timeEl = document.getElementById('incoming-url-time');
+
+          if (box) {
+            box.style.display = 'block';
+            titleEl.innerText = val.title || '大屏分享的網頁';
+            linkEl.innerText = val.url;
+            timeEl.innerText = new Date(val.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          }
+
+          // 彈出 Toast 提示
+          const toast = document.getElementById('mobile-toast');
+          const toastText = document.getElementById('mobile-toast-text');
+          if (toast && toastText) {
+            toastText.innerText = (val.title ? `【${val.title}】
+` : '') + val.url;
+            toast.style.display = 'block';
+          }
+
+          // 自動儲存到歷史推送紀錄中
+          saveToHistory(val.url, (val.title || val.url) + ' (大屏推送)');
+        }
+      });
+    }
 
 </script>
 </body>

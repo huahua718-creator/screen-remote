@@ -52,16 +52,18 @@
     .screen-tool-btn.active { background: #ff9500; }
     .toolbar-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.3); margin: 0 2px; }
   
-    /* 📁 大屏檔案傳輸懸浮鈕與面板樣式 */
-    #screen-ft-fab {
-      position: fixed; bottom: 20px; left: 20px; z-index: 1000;
+    /* 📁 大屏功能懸浮按鈕樣式 */
+
+    .screen-fab-btn {
       background: rgba(28, 28, 30, 0.88); color: #fff; border: 1px solid rgba(255,255,255,0.25);
       padding: 10px 18px; border-radius: 30px; font-weight: bold; font-size: 0.95rem;
       cursor: pointer; display: flex; align-items: center; gap: 6px;
       backdrop-filter: blur(12px); box-shadow: 0 4px 16px rgba(0,0,0,0.5);
       transition: all 0.2s;
     }
-    #screen-ft-fab:hover { background: rgba(44, 44, 46, 0.95); transform: translateY(-2px); border-color:#007aff; }
+    .screen-fab-btn:hover { background: rgba(44, 44, 46, 0.95); transform: translateY(-2px); border-color:#007aff; }
+
+
     
     #screen-ft-badge {
       display: none; background: #ff3b30; color: white; border-radius: 10px;
@@ -149,6 +151,7 @@
   
   <!-- 展開時顯示的完整工具列 (預設隱藏 display:none) -->
   <div id="screen-tb-content" style="display: none; align-items: center; gap: 8px;">
+    <button class="screen-tool-btn" id="tb-share-url-btn" onclick="shareCurrentUrlToMobile()" title="將當前網頁推送到手機" style="background:#007aff; display:none;">📲 推送網頁給手機</button>
     <button class="screen-tool-btn" id="screen-pan-btn" onclick="togglePanMode()" title="切換移動/標註模式">🖐️ 移動</button>
     <button class="screen-tool-btn" onclick="zoomIn()" title="放大">🔍+</button>
     <button class="screen-tool-btn" onclick="zoomOut()" title="縮小">🔍-</button>
@@ -166,10 +169,49 @@
 </div>
 
   
-  <!-- 🌟 大屏檔案傳輸懸浮按鈕 -->
-  <button id="screen-ft-fab" onclick="toggleScreenFtModal()" title="雙向檔案傳輸中心">
-    📁 檔案傳輸 <span id="screen-ft-badge">0</span>
-  </button>
+  <!-- 🌟 大屏左下角功能懸浮按鈕列 -->
+  <div id="screen-bottom-fab-bar" style="position: fixed; bottom: 20px; left: 20px; z-index: 1000; display: flex; gap: 10px; align-items: center;">
+    <button id="screen-ft-fab" class="screen-fab-btn" onclick="toggleScreenFtModal()" title="雙向檔案傳輸中心">
+      📁 檔案傳輸 <span id="screen-ft-badge">0</span>
+    </button>
+    <button id="screen-url-fab" class="screen-fab-btn" onclick="toggleScreenUrlModal()" title="網頁雙向推送中心">
+      🌐 網頁推送
+    </button>
+  </div>
+
+  
+  <!-- 🌟 大屏網頁雙向推送中心 Modal 視窗 -->
+  <div id="screen-url-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.65); z-index: 9999; backdrop-filter: blur(8px); justify-content: center; align-items: center;" onclick="handleScreenUrlBackdrop(event)">
+    <div class="screen-ft-dialog" onclick="event.stopPropagation()">
+      <div class="sft-header">
+        <h3 style="margin: 0; font-size: 1.15rem; display: flex; align-items: center; gap: 8px;">🌐 網頁雙向推送中心</h3>
+        <button class="sft-close-btn" onclick="toggleScreenUrlModal(false)">✖</button>
+      </div>
+
+      <!-- 區塊一：一鍵分享當前大屏展示的網頁至手機 -->
+      <div id="screen-current-url-section" style="border: 1px solid rgba(52, 199, 89, 0.4); border-radius: 12px; padding: 14px; background: rgba(52, 199, 89, 0.08); margin-bottom: 16px; display: none;">
+        <h4 style="margin: 0 0 6px 0; color: #34c759; font-size: 0.95rem;">📌 當前大屏正在展示網頁：</h4>
+        <div id="screen-current-url-display" style="font-size: 0.85rem; color: #ddd; word-break: break-all; margin-bottom: 10px; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 6px;"></div>
+        <button class="sft-btn" style="background: #34c759; color: white; width: 100%; font-weight: bold;" onclick="shareCurrentUrlToMobile()">📲 一鍵推送此網頁至手機端</button>
+      </div>
+
+      <!-- 區塊二：輸入新網址推送到手機或大屏載入 -->
+      <div style="border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 12px; padding: 14px; background: rgba(255, 255, 255, 0.03);">
+        <h4 style="margin: 0 0 10px 0; color: #4dabf7; font-size: 0.95rem;">🔗 輸入網址進行雙向推送：</h4>
+        
+        <label style="font-size: 0.8rem; color: #aaa; display: block; margin-bottom: 4px;">網址 (網頁連結或 YouTube)：</label>
+        <input type="url" id="screen-push-url-input" placeholder="例如：https://example.com" style="width: 100%; padding: 10px; border: 1px solid #444; border-radius: 8px; background: #2c2c2e; color: #fff; font-size: 0.9rem; margin-bottom: 10px; box-sizing: border-box;">
+
+        <label style="font-size: 0.8rem; color: #aaa; display: block; margin-bottom: 4px;">網頁備註名稱（選填）：</label>
+        <input type="text" id="screen-push-name-input" placeholder="例如：英語講義 / 線上作答卷" style="width: 100%; padding: 10px; border: 1px solid #444; border-radius: 8px; background: #2c2c2e; color: #fff; font-size: 0.9rem; margin-bottom: 14px; box-sizing: border-box;">
+
+        <div style="display: flex; gap: 8px;">
+          <button class="sft-btn sft-primary-btn" style="flex: 1;" onclick="pushUrlFromScreenToMobile()">📲 推送至手機端</button>
+          <button class="sft-btn sft-action-btn" style="flex: 1; background: #5856d6;" onclick="loadUrlOnScreenDirectly()">📺 在大屏全螢幕載入</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- 🌟 大屏即時接收 Toast 提示 -->
   <div id="screen-ft-toast" onclick="toggleScreenFtModal(true)"></div>
@@ -337,10 +379,14 @@
 
       if (data.mode === 'url' && data.url) {
         currentOfferSdp = null;
+        currentIframeUrl = data.url;
         closeWebRTC(); showView('iframe');
         document.getElementById('iframe-view').src = formatEmbedUrl(data.url);
         document.getElementById('screen-draw-toolbar').style.display = 'flex';
         document.getElementById('screen-pager-bar').style.display = 'none';
+        const shareBtn = document.getElementById('tb-share-url-btn');
+        if (shareBtn) shareBtn.style.display = 'inline-block';
+        showScreenFtToast(`🌐 已載入網頁：${data.url}`);
 
       } else if (data.mode === 'photo' && data.photoUrl) {
         currentOfferSdp = null;
@@ -652,6 +698,9 @@
       currentOfferSdp = null;
       resetZoom();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      currentIframeUrl = '';
+      const shareBtn = document.getElementById('tb-share-url-btn');
+      if (shareBtn) shareBtn.style.display = 'none';
       document.getElementById('iframe-view').src = "about:blank";
       document.getElementById('photo-view').src = "";
       document.getElementById('iframe-view').style.display = 'none';
@@ -1103,6 +1152,87 @@ function setToolbarToMinimized() {
 
     // 啟動大屏檔案傳輸信令監聽
     initScreenFileTransferSignaling();
+
+
+    // ==========================================
+    // 🌐 大屏端網頁雙向推送模組
+    // ==========================================
+    let currentIframeUrl = '';
+
+    window.toggleScreenUrlModal = function(show) {
+      const modal = document.getElementById('screen-url-modal');
+      const shouldShow = (typeof show === 'boolean') ? show : (modal.style.display !== 'flex');
+      modal.style.display = shouldShow ? 'flex' : 'none';
+
+      if (shouldShow) {
+        // 更新當前展示網頁區塊
+        const section = document.getElementById('screen-current-url-section');
+        const display = document.getElementById('screen-current-url-display');
+        if (currentIframeUrl) {
+          section.style.display = 'block';
+          display.innerText = currentIframeUrl;
+        } else {
+          section.style.display = 'none';
+        }
+      }
+    };
+
+    window.handleScreenUrlBackdrop = function(e) {
+      if (e.target.id === 'screen-url-modal') {
+        toggleScreenUrlModal(false);
+      }
+    };
+
+    // 將大屏當前正在展示的網頁推送到手機端
+    window.shareCurrentUrlToMobile = async function() {
+      if (!currentIframeUrl) {
+        alert('目前大屏尚未載入任何網頁！');
+        return;
+      }
+      await set(ref(db, `screens/${screenId}/pushedUrlToMobile`), {
+        url: currentIframeUrl,
+        title: '大屏當前網頁',
+        timestamp: Date.now()
+      });
+      showScreenFtToast(`✅ 已成功將網頁推送至手機端！`);
+      toggleScreenUrlModal(false);
+    };
+
+    // 從大屏輸入網址推送到手機端
+    window.pushUrlFromScreenToMobile = async function() {
+      let url = document.getElementById('screen-push-url-input').value.trim();
+      const title = document.getElementById('screen-push-name-input').value.trim();
+      if (!url) {
+        alert('請先輸入要推送的網址！');
+        return;
+      }
+      if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
+
+      await set(ref(db, `screens/${screenId}/pushedUrlToMobile`), {
+        url: url,
+        title: title || url,
+        timestamp: Date.now()
+      });
+
+      showScreenFtToast(`✅ 已將網頁推送至手機端！`);
+      document.getElementById('screen-push-url-input').value = '';
+      document.getElementById('screen-push-name-input').value = '';
+      toggleScreenUrlModal(false);
+    };
+
+    // 大屏端直接載入輸入的網址
+    window.loadUrlOnScreenDirectly = function() {
+      let url = document.getElementById('screen-push-url-input').value.trim();
+      if (!url) {
+        alert('請先輸入網址！');
+        return;
+      }
+      if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
+
+      set(screenRef, { mode: 'url', url: url, updatedAt: Date.now() });
+      toggleScreenUrlModal(false);
+      showScreenFtToast(`📺 大屏載入網頁中...`);
+    };
 
 </script>
 </body>
