@@ -47,7 +47,8 @@
       padding: 8px 14px; border-radius: 30px; z-index: 1000; align-items: center; gap: 8px;
       backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2);
     }
-    .screen-color-btn { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+    .screen-color-btn { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.3); transition: transform 0.15s, box-shadow 0.15s; }
+    .screen-color-btn.active { transform: scale(1.22); box-shadow: 0 0 0 2px #fff, 0 0 10px rgba(255,255,255,0.9); }
     .screen-tool-btn { padding: 5px 12px; border-radius: 15px; border: none; background: #555; color: white; font-size: 0.85rem; font-weight: bold; cursor: pointer; }
     .screen-tool-btn.active { background: #ff9500; }
     .toolbar-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.3); margin: 0 2px; }
@@ -152,12 +153,13 @@
   <!-- 展開時顯示的完整工具列 (預設隱藏 display:none) -->
   <div id="screen-tb-content" style="display: none; align-items: center; gap: 8px;">
     <button class="screen-tool-btn" id="tb-share-url-btn" onclick="shareCurrentUrlToMobile()" title="將當前網頁推送到手機" style="background:#007aff; display:none;">📲 推送網頁給手機</button>
-    <button class="screen-tool-btn" id="screen-pan-btn" onclick="togglePanMode()" title="切換移動/標註模式">🖐️ 移動</button>
+    <button class="screen-tool-btn active" id="screen-draw-btn" onclick="setDrawMode()" title="畫筆標註模式">✏️ 畫筆</button>
+    <button class="screen-tool-btn" id="screen-pan-btn" onclick="togglePanMode()" title="畫面移動拖曳">🖐️ 移動</button>
     <button class="screen-tool-btn" onclick="zoomIn()" title="放大">🔍+</button>
     <button class="screen-tool-btn" onclick="zoomOut()" title="縮小">🔍-</button>
     <button class="screen-tool-btn" onclick="resetZoom()" title="重設畫面">🔄</button>
     <div class="toolbar-divider"></div>
-    <div class="screen-color-btn" style="background:#ff3b30;" onclick="setScreenPen('#ff3b30')"></div>
+    <div class="screen-color-btn active" style="background:#ff3b30;" onclick="setScreenPen('#ff3b30')"></div>
     <div class="screen-color-btn" style="background:#ffcc00;" onclick="setScreenPen('#ffcc00')"></div>
     <div class="screen-color-btn" style="background:#34c759;" onclick="setScreenPen('#34c759')"></div>
     <div class="screen-color-btn" style="background:#007aff;" onclick="setScreenPen('#007aff')"></div>
@@ -365,11 +367,33 @@
       updateTransform();
     };
 
+    window.setDrawMode = function() {
+      activeMode = 'draw';
+      isScreenEraserMode = false;
+      const panBtn = document.getElementById('screen-pan-btn');
+      const drawBtn = document.getElementById('screen-draw-btn');
+      const eraserBtn = document.getElementById('screen-eraser-btn');
+      if (panBtn) panBtn.classList.remove('active');
+      if (drawBtn) drawBtn.classList.add('active');
+      if (eraserBtn) eraserBtn.classList.remove('active');
+      canvas.style.cursor = 'crosshair';
+      updateColorBtnActive();
+    };
+
     window.togglePanMode = function() {
-      activeMode = activeMode === 'draw' ? 'pan' : 'draw';
-      const btn = document.getElementById('screen-pan-btn');
-      if (btn) btn.classList.toggle('active', activeMode === 'pan');
-      canvas.style.cursor = activeMode === 'pan' ? 'grab' : 'crosshair';
+      if (activeMode === 'pan') {
+        window.setDrawMode();
+      } else {
+        activeMode = 'pan';
+        const panBtn = document.getElementById('screen-pan-btn');
+        const drawBtn = document.getElementById('screen-draw-btn');
+        const eraserBtn = document.getElementById('screen-eraser-btn');
+        if (panBtn) panBtn.classList.add('active');
+        if (drawBtn) drawBtn.classList.remove('active');
+        if (eraserBtn) eraserBtn.classList.remove('active');
+        canvas.style.cursor = 'grab';
+        document.querySelectorAll('.screen-color-btn').forEach(b => b.classList.remove('active'));
+      }
     };
 
     // 狀態監聽
@@ -461,33 +485,53 @@
     });
 
     window.setScreenPen = function(color) {
+      activeMode = 'draw';
       isScreenEraserMode = false;
       screenColor = color;
-      document.getElementById('screen-eraser-btn').classList.remove('active');
+      const panBtn = document.getElementById('screen-pan-btn');
+      const drawBtn = document.getElementById('screen-draw-btn');
+      const eraserBtn = document.getElementById('screen-eraser-btn');
+      if (panBtn) panBtn.classList.remove('active');
+      if (drawBtn) drawBtn.classList.add('active');
+      if (eraserBtn) eraserBtn.classList.remove('active');
+      canvas.style.cursor = 'crosshair';
+      updateColorBtnActive();
     };
 
     window.toggleScreenEraser = function() {
+      activeMode = 'draw';
       isScreenEraserMode = !isScreenEraserMode;
-      document.getElementById('screen-eraser-btn').classList.toggle('active', isScreenEraserMode);
+      const panBtn = document.getElementById('screen-pan-btn');
+      const drawBtn = document.getElementById('screen-draw-btn');
+      const eraserBtn = document.getElementById('screen-eraser-btn');
+      if (panBtn) panBtn.classList.remove('active');
+      if (drawBtn) drawBtn.classList.toggle('active', !isScreenEraserMode);
+      if (eraserBtn) eraserBtn.classList.toggle('active', isScreenEraserMode);
+      canvas.style.cursor = isScreenEraserMode ? 'cell' : 'crosshair';
+      if (isScreenEraserMode) {
+        document.querySelectorAll('.screen-color-btn').forEach(b => b.classList.remove('active'));
+      } else {
+        updateColorBtnActive();
+      }
     };
+
+    function updateColorBtnActive() {
+      document.querySelectorAll('.screen-color-btn').forEach(b => {
+        b.classList.toggle('active', !isScreenEraserMode && activeMode === 'draw' && (b.getAttribute('onclick') || '').includes(screenColor));
+      });
+    }
 
     window.clearScreenCanvas = function() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       remove(ref(db, `screens/${screenId}/drawEvents`));
     };
 
-    // 🌟 轉換螢幕座標至矩陣層座標（讓畫筆筆跡在縮放/移動後依然無縫精確）
+    // 🌟 轉換螢幕座標至矩陣層原生畫布座標（精準支援任意縮放倍率與平移位置）
     function getLayerCoords(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
-      const screenX = clientX - rect.left;
-      const screenY = clientY - rect.top;
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2;
-
-      const layerX = cx + (screenX - cx - translateX) / scale;
-      const layerY = cy + (screenY - cy - translateY) / scale;
-
-      return { x: layerX, y: layerY };
+      const x = ((clientX - rect.left) / rect.width) * canvas.width;
+      const y = ((clientY - rect.top) / rect.height) * canvas.height;
+      return { x, y };
     }
 
     // 🌟 縮放與移動觸控/滑鼠手勢處理
@@ -581,7 +625,7 @@
       isScreenDrawing = false;
       isPanning = false;
       initialPinchDist = null;
-      canvas.style.cursor = activeMode === 'pan' ? 'grab' : 'crosshair';
+      canvas.style.cursor = activeMode === 'pan' ? 'grab' : (isScreenEraserMode ? 'cell' : 'crosshair');
     }
 
     canvas.addEventListener('mousedown', handleScreenStart);
