@@ -974,23 +974,35 @@ function setToolbarToMinimized() {
     function initScreenFileTransferSignaling() {
       const offerRef = ref(db, `screens/${screenId}/fileTransfer/offer`);
       let lastOfferTime = 0;
+      let lastOfferSdp = '';
 
       onValue(offerRef, async (snapshot) => {
         const val = snapshot.val();
-        if (!val || !val.sdp || val.timestamp <= lastOfferTime) return;
-        lastOfferTime = val.timestamp;
+        if (!val || !val.sdp || (val.timestamp === lastOfferTime && val.sdp === lastOfferSdp)) return;
+        lastOfferTime = val.timestamp || Date.now();
+        lastOfferSdp = val.sdp;
 
         console.log("大屏端收到手機檔案傳輸 Offer:", val);
         updateScreenFtStatus('connecting');
 
         try {
+          if (sftCallerCandidatesListener) { off(sftCallerCandidatesListener); sftCallerCandidatesListener = null; }
           if (sftPeerConnection) {
             try { sftPeerConnection.close(); } catch(e){}
             sftPeerConnection = null;
           }
+          sftDataChannel = null;
 
           sftPeerConnection = new RTCPeerConnection(rtcConfig);
           sftIceCandidateQueue = [];
+
+          sftPeerConnection.oniceconnectionstatechange = () => {
+            if (!sftPeerConnection) return;
+            const st = sftPeerConnection.iceConnectionState;
+            if (st === 'failed' || st === 'closed') {
+              updateScreenFtStatus('disconnected');
+            }
+          };
 
           sftPeerConnection.ondatachannel = (event) => {
             console.log("大屏端收到 DataChannel:", event.channel.label);
