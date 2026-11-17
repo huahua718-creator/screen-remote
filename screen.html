@@ -314,7 +314,32 @@
 
     const canvas = document.getElementById('annotation-canvas');
     const ctx = canvas.getContext('2d');
-    function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+    let localDrawHistory = [];
+
+    function drawStroke(d) {
+      if (!d) return;
+      ctx.beginPath();
+      ctx.moveTo(d.x0 * canvas.width, d.y0 * canvas.height);
+      ctx.lineTo(d.x1 * canvas.width, d.y1 * canvas.height);
+      if (d.isEraser) {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.lineWidth = d.size || 20;
+      } else {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.strokeStyle = d.color;
+        ctx.lineWidth = d.size || 4;
+      }
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      localDrawHistory.forEach(drawStroke);
+    }
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
 
@@ -332,8 +357,11 @@
     let activeMode = 'draw'; // 'draw' 或 'pan'
     let isScreenDrawing = false, screenLastX = 0, screenLastY = 0;
     let isPanning = false, panStartX = 0, panStartY = 0;
-    let initialPinchDist = null, initialScale = 1;
+    let initialPinchDist = null, initialScale = 1, pinchStartMidX = 0, pinchStartMidY = 0, pinchStartTranslateX = 0, pinchStartTranslateY = 0;
+    let isTouchMulti = false;
     let screenColor = '#ff3b30', isScreenEraserMode = false;
+    let lastRenderedMode = '';
+    let lastRenderedContentKey = '';
 
     const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
@@ -351,20 +379,39 @@
       }
     }
 
+    function zoomAtPoint(newScale, clientX, clientY) {
+      newScale = Math.min(Math.max(1, newScale), 8);
+      if (newScale === 1) {
+        scale = 1;
+        translateX = 0;
+        translateY = 0;
+        updateTransform();
+        return;
+      }
+      const viewport = document.getElementById('media-viewport');
+      const rect = viewport ? viewport.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const dx = clientX - cx;
+      const dy = clientY - cy;
+      const ratio = newScale / scale;
+      translateX = dx - (dx - translateX) * ratio;
+      translateY = dy - (dy - translateY) * ratio;
+      scale = newScale;
+      updateTransform();
+    }
+
     window.resetZoom = function() {
       scale = 1; translateX = 0; translateY = 0;
       updateTransform();
     };
 
     window.zoomIn = function() {
-      scale = Math.min(scale * 1.25, 8);
-      updateTransform();
+      zoomAtPoint(scale * 1.25, window.innerWidth / 2, window.innerHeight / 2);
     };
 
     window.zoomOut = function() {
-      scale = Math.max(scale / 1.25, 1);
-      if (scale === 1) { translateX = 0; translateY = 0; }
-      updateTransform();
+      zoomAtPoint(scale / 1.25, window.innerWidth / 2, window.innerHeight / 2);
     };
 
     window.setDrawMode = function() {
@@ -396,41 +443,53 @@
       }
     };
 
-    // 狀態監聽
+    // 狀態監聽（僅在模式或主要顯示內容真正改變時才切換視圖與重設縮放，避免畫筆/檔案子節點寫入時誤觸重置）
     onValue(screenRef, async (snapshot) => {
       const data = snapshot.val();
       if (!data) return;
 
       if (data.mode === 'url' && data.url) {
-        currentOfferSdp = null;
-        currentIframeUrl = data.url;
-        closeWebRTC(); showView('iframe');
-        document.getElementById('iframe-view').src = formatEmbedUrl(data.url);
-        document.getElementById('screen-draw-toolbar').style.display = 'flex';
-        document.getElementById('screen-pager-bar').style.display = 'none';
-        const shareBtn = document.getElementById('tb-share-url-btn');
-        if (shareBtn) shareBtn.style.display = 'inline-block';
-        showScreenFtToast(`🌐 已載入網頁：${data.url}`);
+        const urlKey = `${data.url}_${data.updatedAt || ''}`;
+        if (lastRenderedMode !== 'url' || lastRenderedContentKey !== urlKey) {
+          lastRenderedMode = 'url';
+          lastRenderedContentKey = urlKey;
+          currentOfferSdp = null;
+          currentIframeUrl = data.url;
+          closeWebRTC(); showView('iframe');
+          document.getElementById('iframe-view').src = formatEmbedUrl(data.url);
+          document.getElementById('screen-draw-toolbar').style.display = 'flex';
+          document.getElementById('screen-pager-bar').style.display = 'none';
+          const shareBtn = document.getElementById('tb-share-url-btn');
+          if (shareBtn) shareBtn.style.display = 'inline-block';
+          showScreenFtToast(`🌐 已載入網頁：${data.url}`);
+        }
 
       } else if (data.mode === 'photo' && data.photoUrl) {
-        currentOfferSdp = null;
-        closeWebRTC(); showView('photo');
-        document.getElementById('photo-view').src = data.photoUrl;
-        resetZoom(); // 換照片自動重設 100%
+        const photoKey = `${data.photoUrl}_${data.photoIndex || 1}_${data.photoTotal || 1}_${data.updatedAt || ''}`;
+        if (lastRenderedMode !== 'photo' || lastRenderedContentKey !== photoKey) {
+          lastRenderedMode = 'photo';
+          lastRenderedContentKey = photoKey;
+          currentOfferSdp = null;
+          closeWebRTC(); showView('photo');
+          document.getElementById('photo-view').src = data.photoUrl;
+          resetZoom(); // 僅在切換照片或換頁時重設為 100%
 
-        currentPhotoIndex = data.photoIndex || 1;
-        currentPhotoTotal = data.photoTotal || 1;
-        const subType = data.mediaSubtype === 'pdf' ? '頁' : '張';
+          currentPhotoIndex = data.photoIndex || 1;
+          currentPhotoTotal = data.photoTotal || 1;
+          const subType = data.mediaSubtype === 'pdf' ? '頁' : '張';
 
-        if (currentPhotoTotal > 1) {
-          document.getElementById('screen-pager-bar').style.display = 'flex';
-          document.getElementById('screen-page-indicator').innerText = `第 ${currentPhotoIndex} / ${currentPhotoTotal} ${subType}`;
-        } else {
-          document.getElementById('screen-pager-bar').style.display = 'none';
+          if (currentPhotoTotal > 1) {
+            document.getElementById('screen-pager-bar').style.display = 'flex';
+            document.getElementById('screen-page-indicator').innerText = `第 ${currentPhotoIndex} / ${currentPhotoTotal} ${subType}`;
+          } else {
+            document.getElementById('screen-pager-bar').style.display = 'none';
+          }
+          document.getElementById('screen-draw-toolbar').style.display = 'flex';
         }
-        document.getElementById('screen-draw-toolbar').style.display = 'flex';
 
       } else if (data.mode === 'webrtc' && data.offer) {
+        lastRenderedMode = 'webrtc';
+        lastRenderedContentKey = data.offer.sdp || '';
         showView('video');
         const tag = document.getElementById('stream-type-tag');
         if (data.mediaType === 'mic') tag.innerText = '🎙️ 無線麥克風廣播中';
@@ -447,8 +506,12 @@
         }
 
       } else if (data.mode === 'idle') {
-        currentOfferSdp = null;
-        resetUI();
+        if (lastRenderedMode !== 'idle') {
+          lastRenderedMode = 'idle';
+          lastRenderedContentKey = '';
+          currentOfferSdp = null;
+          resetUI();
+        }
       }
     });
 
@@ -464,24 +527,16 @@
     onChildAdded(drawEventsRef, (snapshot) => {
       const d = snapshot.val();
       if (d) {
-        ctx.beginPath();
-        ctx.moveTo(d.x0 * canvas.width, d.y0 * canvas.height);
-        ctx.lineTo(d.x1 * canvas.width, d.y1 * canvas.height);
-        if (d.isEraser) {
-          ctx.globalCompositeOperation = 'destination-out';
-          ctx.lineWidth = d.size || 20;
-        } else {
-          ctx.globalCompositeOperation = 'source-over';
-          ctx.strokeStyle = d.color;
-          ctx.lineWidth = d.size || 4;
-        }
-        ctx.lineCap = 'round'; ctx.stroke();
-        ctx.globalCompositeOperation = 'source-over';
+        localDrawHistory.push(d);
+        drawStroke(d);
       }
     });
 
     onValue(drawEventsRef, (snapshot) => {
-      if (!snapshot.exists()) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!snapshot.exists()) {
+        localDrawHistory = [];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
     });
 
     window.setScreenPen = function(color) {
@@ -522,6 +577,7 @@
     }
 
     window.clearScreenCanvas = function() {
+      localDrawHistory = [];
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       remove(ref(db, `screens/${screenId}/drawEvents`));
     };
@@ -529,6 +585,7 @@
     // 🌟 轉換螢幕座標至矩陣層原生畫布座標（精準支援任意縮放倍率與平移位置）
     function getLayerCoords(clientX, clientY) {
       const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return { x: 0, y: 0 };
       const x = ((clientX - rect.left) / rect.width) * canvas.width;
       const y = ((clientY - rect.top) / rect.height) * canvas.height;
       return { x, y };
@@ -538,23 +595,26 @@
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
-      const newScale = Math.min(Math.max(1, scale * zoomFactor), 8);
-      if (newScale === 1) { translateX = 0; translateY = 0; }
-      scale = newScale;
-      updateTransform();
+      zoomAtPoint(scale * zoomFactor, e.clientX, e.clientY);
     }, { passive: false });
 
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
     function handleScreenStart(e) {
       if (document.getElementById('qrcode-view').style.display !== 'none') return;
+      if (e.type === 'touchstart') e.preventDefault();
 
       // 觸控雙指縮放與拖曳
-      if (e.touches && e.touches.length === 2) {
+      if (e.touches && e.touches.length >= 2) {
+        isTouchMulti = true;
         isPanning = true;
         isScreenDrawing = false;
-        panStartX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - translateX;
-        panStartY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - translateY;
+        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        pinchStartMidX = midX;
+        pinchStartMidY = midY;
+        pinchStartTranslateX = translateX;
+        pinchStartTranslateY = translateY;
         initialPinchDist = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
@@ -562,6 +622,9 @@
         initialScale = scale;
         return;
       }
+
+      // 剛結束雙指手勢但尚有一指未離屏時，避免誤觸單指畫筆
+      if (isTouchMulti) return;
 
       // 切換為移動模式 / 按住滑鼠右鍵/中鍵
       if (activeMode === 'pan' || e.button === 1 || e.button === 2) {
@@ -578,25 +641,52 @@
         const coords = getLayerCoords(touch.clientX, touch.clientY);
         screenLastX = coords.x;
         screenLastY = coords.y;
+
+        // 支援單點點擊即時標記（小點）
+        const adaptiveSize = isScreenEraserMode ? Math.max(8, 24 / scale) : Math.max(1.2, 4 / scale);
+        push(ref(db, `screens/${screenId}/drawEvents`), {
+          x0: screenLastX / canvas.width, y0: screenLastY / canvas.height,
+          x1: (screenLastX + 0.01) / canvas.width, y1: (screenLastY + 0.01) / canvas.height,
+          color: screenColor,
+          size: adaptiveSize,
+          isEraser: isScreenEraserMode
+        });
       }
     }
 
     function handleScreenMove(e) {
+      if (e.type === 'touchmove') e.preventDefault();
+
       if (isPanning) {
-        if (e.touches && e.touches.length === 2) {
+        if (e.touches && e.touches.length >= 2) {
           const currentDist = Math.hypot(
             e.touches[0].clientX - e.touches[1].clientX,
             e.touches[0].clientY - e.touches[1].clientY
           );
-          if (initialPinchDist) {
-            scale = Math.min(Math.max(1, initialScale * (currentDist / initialPinchDist)), 8);
-          }
           const currentMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
           const currentMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-          translateX = currentMidX - panStartX;
-          translateY = currentMidY - panStartY;
+          if (initialPinchDist) {
+            const newScale = Math.min(Math.max(1, initialScale * (currentDist / initialPinchDist)), 8);
+            const ratio = newScale / initialScale;
+            const viewport = document.getElementById('media-viewport');
+            const rect = viewport ? viewport.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+            const cx = rect.left + rect.width / 2;
+            const cy = rect.top + rect.height / 2;
+            const dx0 = pinchStartMidX - cx;
+            const dy0 = pinchStartMidY - cy;
+            const dx1 = currentMidX - cx;
+            const dy1 = currentMidY - cy;
+            scale = newScale;
+            if (scale === 1) {
+              translateX = 0;
+              translateY = 0;
+            } else {
+              translateX = dx1 - (dx0 - pinchStartTranslateX) * ratio;
+              translateY = dy1 - (dy0 - pinchStartTranslateY) * ratio;
+            }
+          }
           updateTransform();
-        } else {
+        } else if (!isTouchMulti) {
           const touch = e.touches ? e.touches[0] : e;
           translateX = touch.clientX - panStartX;
           translateY = touch.clientY - panStartY;
@@ -605,15 +695,16 @@
         return;
       }
 
-      if (!isScreenDrawing) return;
+      if (!isScreenDrawing || isTouchMulti) return;
       const touch = e.touches ? e.touches[0] : e;
       const coords = getLayerCoords(touch.clientX, touch.clientY);
+      const adaptiveSize = isScreenEraserMode ? Math.max(8, 24 / scale) : Math.max(1.2, 4 / scale);
 
       push(ref(db, `screens/${screenId}/drawEvents`), {
         x0: screenLastX / canvas.width, y0: screenLastY / canvas.height,
         x1: coords.x / canvas.width, y1: coords.y / canvas.height,
         color: screenColor,
-        size: isScreenEraserMode ? 20 : 4,
+        size: adaptiveSize,
         isEraser: isScreenEraserMode
       });
 
@@ -621,7 +712,15 @@
       screenLastY = coords.y;
     }
 
-    function handleScreenEnd() {
+    function handleScreenEnd(e) {
+      if (e && e.type && e.type.startsWith('touch')) e.preventDefault();
+      if (e && e.touches && e.touches.length > 0) {
+        // 雙指放開一指時，暫時結束 panning，等所有手指離開後才重置 isTouchMulti
+        isScreenDrawing = false;
+        isPanning = false;
+        return;
+      }
+      isTouchMulti = false;
       isScreenDrawing = false;
       isPanning = false;
       initialPinchDist = null;
@@ -631,9 +730,11 @@
     canvas.addEventListener('mousedown', handleScreenStart);
     canvas.addEventListener('mousemove', handleScreenMove);
     canvas.addEventListener('mouseup', handleScreenEnd);
-    canvas.addEventListener('touchstart', handleScreenStart);
-    canvas.addEventListener('touchmove', handleScreenMove);
-    canvas.addEventListener('touchend', handleScreenEnd);
+    canvas.addEventListener('mouseleave', handleScreenEnd);
+    canvas.addEventListener('touchstart', handleScreenStart, { passive: false });
+    canvas.addEventListener('touchmove', handleScreenMove, { passive: false });
+    canvas.addEventListener('touchend', handleScreenEnd, { passive: false });
+    canvas.addEventListener('touchcancel', handleScreenEnd, { passive: false });
 
     // WebRTC P2P 連線處理
     async function handleWebRTCOffer(offer, mediaType) {
@@ -740,6 +841,9 @@
     function resetUI() {
       closeWebRTC();
       currentOfferSdp = null;
+      lastRenderedMode = '';
+      lastRenderedContentKey = '';
+      localDrawHistory = [];
       resetZoom();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       currentIframeUrl = '';
