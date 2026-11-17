@@ -314,30 +314,39 @@
 
     const canvas = document.getElementById('annotation-canvas');
     const ctx = canvas.getContext('2d');
+    const canvasDpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 2.5);
     let localDrawHistory = [];
 
     function drawStroke(d) {
       if (!d) return;
+      ctx.save();
       ctx.beginPath();
       ctx.moveTo(d.x0 * canvas.width, d.y0 * canvas.height);
       ctx.lineTo(d.x1 * canvas.width, d.y1 * canvas.height);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       if (d.isEraser) {
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = 'transparent';
         ctx.globalCompositeOperation = 'destination-out';
-        ctx.lineWidth = d.size || 20;
+        ctx.lineWidth = (d.size || 24) * canvasDpr;
       } else {
         ctx.globalCompositeOperation = 'source-over';
         ctx.strokeStyle = d.color;
-        ctx.lineWidth = d.size || 4;
+        const baseWidth = Math.max(d.size || 7, 3.0);
+        ctx.lineWidth = baseWidth * canvasDpr;
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+        ctx.shadowBlur = 2 * canvasDpr;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
       }
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
       ctx.stroke();
-      ctx.globalCompositeOperation = 'source-over';
+      ctx.restore();
     }
 
     function resizeCanvas() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      canvas.width = Math.round(window.innerWidth * canvasDpr);
+      canvas.height = Math.round(window.innerHeight * canvasDpr);
       localDrawHistory.forEach(drawStroke);
     }
     window.addEventListener('resize', resizeCanvas);
@@ -642,11 +651,11 @@
         screenLastX = coords.x;
         screenLastY = coords.y;
 
-        // 支援單點點擊即時標記（小點）
-        const adaptiveSize = isScreenEraserMode ? Math.max(8, 24 / scale) : Math.max(1.2, 4 / scale);
+        // 支援單點點擊即時標記（實心飽滿圓點）
+        const adaptiveSize = isScreenEraserMode ? Math.max(12, 26 / Math.pow(scale, 0.7)) : Math.max(3.0, 7 / Math.pow(scale, 0.65));
         push(ref(db, `screens/${screenId}/drawEvents`), {
           x0: screenLastX / canvas.width, y0: screenLastY / canvas.height,
-          x1: (screenLastX + 0.01) / canvas.width, y1: (screenLastY + 0.01) / canvas.height,
+          x1: (screenLastX + 0.5 * canvasDpr) / canvas.width, y1: (screenLastY + 0.5 * canvasDpr) / canvas.height,
           color: screenColor,
           size: adaptiveSize,
           isEraser: isScreenEraserMode
@@ -698,7 +707,7 @@
       if (!isScreenDrawing || isTouchMulti) return;
       const touch = e.touches ? e.touches[0] : e;
       const coords = getLayerCoords(touch.clientX, touch.clientY);
-      const adaptiveSize = isScreenEraserMode ? Math.max(8, 24 / scale) : Math.max(1.2, 4 / scale);
+      const adaptiveSize = isScreenEraserMode ? Math.max(12, 26 / Math.pow(scale, 0.7)) : Math.max(3.0, 7 / Math.pow(scale, 0.65));
 
       push(ref(db, `screens/${screenId}/drawEvents`), {
         x0: screenLastX / canvas.width, y0: screenLastY / canvas.height,

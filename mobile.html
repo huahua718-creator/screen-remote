@@ -91,7 +91,7 @@
   <div style="padding: 5px;">
     <div class="card">
       <label for="room-input">大屏房間碼 (PIN)：</label>
-      <input type="text" id="room-input" placeholder="例如：839201" onchange="listenToPageRequests()">
+      <input type="text" id="room-input" placeholder="例如：839201" oninput="onRoomIdChanged()" onchange="onRoomIdChanged()">
       <button class="action-btn stop-btn" onclick="resetRemoteScreen()" style="margin-top: 5px;">⏹️ 結束大屏投放 (返回待機)</button>
     </div>
 
@@ -341,11 +341,25 @@
 
     const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-    document.addEventListener('DOMContentLoaded', () => { loadHistory(); listenToPageRequests(); listenToScreenFtRequests(); listenToIncomingUrlsFromScreen(); });
+    let currentListeningRoom = '';
+    window.onRoomIdChanged = function() {
+      const id = getScreenId(false);
+      if (!id || id === currentListeningRoom) return;
+      currentListeningRoom = id;
+      listenToPageRequests();
+      listenToScreenFtRequests();
+      listenToIncomingUrlsFromScreen();
+      if (typeof listenToScreenDrawEvents === 'function') listenToScreenDrawEvents();
+    };
+
+    document.addEventListener('DOMContentLoaded', () => {
+      loadHistory();
+      onRoomIdChanged();
+    });
 
     // 監聽大屏傳來的翻頁要求
     window.listenToPageRequests = function() {
-      const screenId = getScreenId(); if (!screenId) return;
+      const screenId = getScreenId(false); if (!screenId) return;
       if (requestPageRef) off(requestPageRef);
       
       requestPageRef = ref(db, `screens/${screenId}/requestPage`);
@@ -994,6 +1008,8 @@ function stopCurrentRecorder(callback) {
     }
 
     function handleStart(e, targetElement) {
+      const sid = getScreenId(true);
+      if (!sid) { drawing = false; return; }
       drawing = true;
       const rect = targetElement.getBoundingClientRect();
       const touch = e.touches ? e.touches[0] : e;
@@ -1003,7 +1019,7 @@ function stopCurrentRecorder(callback) {
 
     function handleMove(e, targetCtx, targetElement) {
       if (!drawing) return;
-      const screenId = getScreenId(); if (!screenId) return;
+      const screenId = getScreenId(false); if (!screenId) return;
       const rect = targetElement.getBoundingClientRect();
       const touch = e.touches ? e.touches[0] : e;
       const currentX = touch.clientX - rect.left;
@@ -1013,7 +1029,7 @@ function stopCurrentRecorder(callback) {
         x0: lastX / targetElement.width, y0: lastY / targetElement.height,
         x1: currentX / targetElement.width, y1: currentY / targetElement.height,
         color: currentColor,
-        size: isEraserMode ? 20 : 4,
+        size: isEraserMode ? 24 : 7,
         isEraser: isEraserMode
       });
 
@@ -1037,9 +1053,16 @@ function stopCurrentRecorder(callback) {
     liveCanvas.addEventListener('mouseup', handleEnd);
 
     // 接收大屏端畫筆筆跡（雙向同步）
-    const screenId = getScreenId();
-    if (screenId) {
-      onChildAdded(ref(db, `screens/${screenId}/drawEvents`), (snapshot) => {
+    let mobileDrawChildRef = null;
+    let mobileDrawValRef = null;
+    function listenToScreenDrawEvents() {
+      const screenId = getScreenId(false);
+      if (!screenId) return;
+      if (mobileDrawChildRef) off(mobileDrawChildRef);
+      if (mobileDrawValRef) off(mobileDrawValRef);
+
+      mobileDrawChildRef = ref(db, `screens/${screenId}/drawEvents`);
+      onChildAdded(mobileDrawChildRef, (snapshot) => {
         const d = snapshot.val();
         if (d) {
           pCtx.beginPath();
@@ -1051,19 +1074,23 @@ function stopCurrentRecorder(callback) {
           } else {
             pCtx.globalCompositeOperation = 'source-over';
             pCtx.strokeStyle = d.color;
-            pCtx.lineWidth = d.size || 4;
+            pCtx.lineWidth = Math.max(d.size || 6, 4);
           }
-          pCtx.lineCap = 'round'; pCtx.stroke();
+          pCtx.lineCap = 'round';
+          pCtx.lineJoin = 'round';
+          pCtx.stroke();
           pCtx.globalCompositeOperation = 'source-over';
         }
       });
 
-      onValue(ref(db, `screens/${screenId}/drawEvents`), (snapshot) => {
+      mobileDrawValRef = ref(db, `screens/${screenId}/drawEvents`);
+      onValue(mobileDrawValRef, (snapshot) => {
         if (!snapshot.exists()) {
           pCtx.clearRect(0, 0, pad.width, pad.height);
         }
       });
     }
+    listenToScreenDrawEvents();
 
     window.clearCanvas = function() {
       const screenId = getScreenId(); if (!screenId) return;
@@ -1072,9 +1099,13 @@ function stopCurrentRecorder(callback) {
       remove(ref(db, `screens/${screenId}/drawEvents`));
     };
 
-    function getScreenId() {
-      const id = document.getElementById('room-input').value.trim();
-      if (!id) alert('請先輸入大屏房間碼！');
+    function getScreenId(showAlert = true) {
+      const inputEl = document.getElementById('room-input');
+      const id = inputEl ? inputEl.value.trim() : '';
+      if (!id && showAlert) {
+        alert('請先輸入大屏房間碼！');
+        if (inputEl) inputEl.focus();
+      }
       return id;
     }
 
@@ -1254,7 +1285,7 @@ if (screenId) {
 
     // 手機作為 Caller 發起 WebRTC DataChannel 連線
     window.ensureMobileFtConnection = async function(userTriggered = false) {
-      const screenId = getScreenId();
+      const screenId = getScreenId(userTriggered);
       if (!screenId) return false;
 
       if (ftDataChannel && ftDataChannel.readyState === 'open') {
@@ -1557,25 +1588,27 @@ if (screenId) {
     };
 
     // 監聽大屏傳送請求 (當大屏端要傳檔案給手機，自動打通通道)
+    let ftReqRef = null;
     function listenToScreenFtRequests() {
-      const screenId = getScreenId();
+      const screenId = getScreenId(false);
       if (!screenId) return;
-      const ftReqRef = ref(db, `screens/${screenId}/fileTransfer/request`);
+      if (ftReqRef) off(ftReqRef);
+      ftReqRef = ref(db, `screens/${screenId}/fileTransfer/request`);
       onValue(ftReqRef, (snap) => {
         const val = snap.val();
         if (val && val.timestamp) {
           console.log("偵測到大屏請求連線，自動打通通道...");
-          ensureMobileFtConnection();
+          ensureMobileFtConnection(false);
         }
       });
     }
 
-    // 監聽切換到檔案傳輸頁籤自動打通通道
+    // 監聽切換到檔案傳輸頁籤自動打通通道（靜默檢查，未輸房間號不跳提示）
     const originalSwitchTab = window.switchTab;
     window.switchTab = function(tabId, btn) {
       originalSwitchTab(tabId, btn);
       if (tabId === 'file-tab') {
-        ensureMobileFtConnection();
+        ensureMobileFtConnection(false);
       }
     };
 
@@ -1585,6 +1618,7 @@ if (screenId) {
     // ==========================================
     let latestIncomingUrl = null;
     let lastHandledPushedUrlTime = 0;
+    let pushedUrlRef = null;
 
     window.openLatestIncomingUrl = function() {
       if (latestIncomingUrl && latestIncomingUrl.url) {
@@ -1605,10 +1639,11 @@ if (screenId) {
     };
 
     function listenToIncomingUrlsFromScreen() {
-      const screenId = getScreenId();
+      const screenId = getScreenId(false);
       if (!screenId) return;
+      if (pushedUrlRef) off(pushedUrlRef);
 
-      const pushedUrlRef = ref(db, `screens/${screenId}/pushedUrlToMobile`);
+      pushedUrlRef = ref(db, `screens/${screenId}/pushedUrlToMobile`);
       onValue(pushedUrlRef, (snap) => {
         const val = snap.val();
         if (!val || !val.url) return;
@@ -1635,8 +1670,7 @@ if (screenId) {
           const toast = document.getElementById('mobile-toast');
           const toastText = document.getElementById('mobile-toast-text');
           if (toast && toastText) {
-            toastText.innerText = (val.title ? `【${val.title}】
-` : '') + val.url;
+            toastText.innerText = (val.title ? `【${val.title}】\n` : '') + val.url;
             toast.style.display = 'block';
           }
 
