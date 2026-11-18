@@ -179,8 +179,8 @@
       
       <div class="tool-bar">
         <div class="color-btn" style="background:#ff3b30;" onclick="selectPen('#ff3b30')"></div>
-        <div class="color-btn" style="background:#ffcc00;" onclick="selectPen('#ffcc00')"></div>
-        <div class="color-btn" style="background:#34c759;" onclick="selectPen('#34c759')"></div>
+        <div class="color-btn" style="background:#ff9500;" onclick="selectPen('#ff9500')"></div>
+        <div class="color-btn" style="background:#22c55e;" onclick="selectPen('#22c55e')"></div>
         <div class="color-btn" style="background:#007aff;" onclick="selectPen('#007aff')"></div>
         <div class="color-btn" style="background:#ffffff;" onclick="selectPen('#ffffff')"></div>
         <button class="tool-btn" id="eraser-btn" onclick="toggleEraser()">🧽 橡皮擦</button>
@@ -1033,7 +1033,7 @@ function stopCurrentRecorder(callback) {
         x0: lastX / targetElement.width, y0: lastY / targetElement.height,
         x1: currentX / targetElement.width, y1: currentY / targetElement.height,
         color: currentColor,
-        size: isEraserMode ? 24 : 7,
+        size: isEraserMode ? 22 : 4.5,
         isEraser: isEraserMode
       });
 
@@ -1063,11 +1063,11 @@ function stopCurrentRecorder(callback) {
       targetCtx.lineTo(d.x1 * targetCanvas.width, d.y1 * targetCanvas.height);
       if (d.isEraser) {
         targetCtx.globalCompositeOperation = 'destination-out';
-        targetCtx.lineWidth = d.size || 20;
+        targetCtx.lineWidth = d.size || 22;
       } else {
         targetCtx.globalCompositeOperation = 'source-over';
         targetCtx.strokeStyle = d.color;
-        targetCtx.lineWidth = Math.max(d.size || 6, 4);
+        targetCtx.lineWidth = Math.max(d.size || 4.5, 2.5);
       }
       targetCtx.lineCap = 'round';
       targetCtx.lineJoin = 'round';
