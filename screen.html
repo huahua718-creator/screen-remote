@@ -124,7 +124,7 @@
     <p>請用手機掃描 QR Code 進行【網址推送 / 影片 / 照片 / PDF / 鏡頭 / 標註】</p>
   </div>
 
-  <iframe id="iframe-view" src="about:blank"></iframe>
+  <iframe id="iframe-view" src="about:blank" allowfullscreen allow="fullscreen; autoplay; clipboard-write; encrypted-media; picture-in-picture"></iframe>
 
   <!-- 🌟 照片與 PDF 展示全螢幕縮放層 -->
   <div id="media-viewport">
@@ -148,6 +148,8 @@
 
   <!-- 🌟 大屏標註與縮放工具列 -->
   <div id="screen-draw-toolbar">
+  <!-- 網頁模式專用：開新視窗打開當前網頁（支援 Google Slides 等完整全螢幕） -->
+  <button class="screen-tool-btn" id="screen-open-new-win-btn" onclick="openCurrentUrlInNewWindow()" title="在新視窗開啟此網頁（支援完整全螢幕）" style="display:none; background:#34c759; border-radius:20px; padding:6px 14px;">↗️ 新視窗開啟</button>
   <!-- 最小化時僅顯示的小按鈕 (預設顯示) -->
   <button class="screen-tool-btn" id="screen-tb-toggle-btn" onclick="toggleScreenToolbar()" style="background:#007aff; border-radius:20px; padding:6px 14px;">✏️ 標註工具</button>
   
@@ -191,11 +193,14 @@
         <button class="sft-close-btn" onclick="toggleScreenUrlModal(false)">✖</button>
       </div>
 
-      <!-- 區塊一：一鍵分享當前大屏展示的網頁至手機 -->
+      <!-- 區塊一：一鍵分享當前大屏展示的網頁至手機 / 開新視窗 -->
       <div id="screen-current-url-section" style="border: 1px solid rgba(52, 199, 89, 0.4); border-radius: 12px; padding: 14px; background: rgba(52, 199, 89, 0.08); margin-bottom: 16px; display: none;">
         <h4 style="margin: 0 0 6px 0; color: #34c759; font-size: 0.95rem;">📌 當前大屏正在展示網頁：</h4>
         <div id="screen-current-url-display" style="font-size: 0.85rem; color: #ddd; word-break: break-all; margin-bottom: 10px; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 6px;"></div>
-        <button class="sft-btn" style="background: #34c759; color: white; width: 100%; font-weight: bold;" onclick="shareCurrentUrlToMobile()">📲 一鍵推送此網頁至手機端</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="sft-btn" style="background: #34c759; color: white; flex: 1; font-weight: bold;" onclick="openCurrentUrlInNewWindow()">↗️ 新視窗開啟</button>
+          <button class="sft-btn" style="background: #007aff; color: white; flex: 1; font-weight: bold;" onclick="shareCurrentUrlToMobile()">📲 推送至手機端</button>
+        </div>
       </div>
 
       <!-- 區塊二：輸入新網址推送到手機或大屏載入 -->
@@ -466,6 +471,8 @@
           document.getElementById('screen-pager-bar').style.display = 'none';
           const shareBtn = document.getElementById('tb-share-url-btn');
           if (shareBtn) shareBtn.style.display = 'inline-block';
+          const newWinBtn = document.getElementById('screen-open-new-win-btn');
+          if (newWinBtn) newWinBtn.style.display = 'inline-block';
           showScreenFtToast(`🌐 已載入網頁：${data.url}`);
         }
 
@@ -479,6 +486,10 @@
           lastRenderedPhotoIdentity = photoIdentity;
           currentOfferSdp = null;
           closeWebRTC(); showView('photo');
+          const newWinBtn = document.getElementById('screen-open-new-win-btn');
+          if (newWinBtn) newWinBtn.style.display = 'none';
+          const shareBtn = document.getElementById('tb-share-url-btn');
+          if (shareBtn) shareBtn.style.display = 'none';
           document.getElementById('photo-view').src = data.photoUrl;
           if (shouldResetZoom) resetZoom(); // 僅在真正換照片或換頁時重設為 100%
 
@@ -499,6 +510,10 @@
         lastRenderedMode = 'webrtc';
         lastRenderedContentKey = data.offer.sdp || '';
         showView('video');
+        const newWinBtn = document.getElementById('screen-open-new-win-btn');
+        if (newWinBtn) newWinBtn.style.display = 'none';
+        const shareBtn = document.getElementById('tb-share-url-btn');
+        if (shareBtn) shareBtn.style.display = 'none';
         const tag = document.getElementById('stream-type-tag');
         if (data.mediaType === 'mic') tag.innerText = '🎙️ 無線麥克風廣播中';
         else if (data.mediaType.startsWith('video-file')) tag.innerText = '🎬 手機影片播放中';
@@ -858,6 +873,8 @@
       currentIframeUrl = '';
       const shareBtn = document.getElementById('tb-share-url-btn');
       if (shareBtn) shareBtn.style.display = 'none';
+      const newWinBtn = document.getElementById('screen-open-new-win-btn');
+      if (newWinBtn) newWinBtn.style.display = 'none';
       document.getElementById('iframe-view').src = "about:blank";
       document.getElementById('photo-view').src = "";
       document.getElementById('iframe-view').style.display = 'none';
@@ -1348,6 +1365,20 @@ function setToolbarToMinimized() {
 
     window.handleScreenUrlBackdrop = function(e) {
       if (e.target.id === 'screen-url-modal') {
+        toggleScreenUrlModal(false);
+      }
+    };
+
+    // 在新視窗打開大屏當前展示的網頁（突破 iframe 全螢幕與嵌入限制）
+    window.openCurrentUrlInNewWindow = function() {
+      if (!currentIframeUrl) {
+        alert('目前大屏尚未載入任何網頁！');
+        return;
+      }
+      const win = window.open(currentIframeUrl, '_blank', 'noopener,noreferrer');
+      if (!win) {
+        alert('瀏覽器已阻擋彈出視窗，請允許此網站開啟彈出視窗後再試一次！');
+      } else {
         toggleScreenUrlModal(false);
       }
     };
