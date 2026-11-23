@@ -7,11 +7,122 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body, html { width: 100%; height: 100%; overflow: hidden; font-family: sans-serif; background: #000; color: #fff; position: relative; }
-    
-    #qrcode-view { display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center; }
-    .pin-code { font-size: 4rem; font-weight: bold; color: #4dabf7; letter-spacing: 5px; margin: 10px 0; }
-    #qrcode { background: #fff; padding: 15px; border-radius: 12px; margin: 15px 0; }
+    body, html {
+      width: 100%; height: 100%; overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background: #020617; color: #fff; position: relative;
+    }
+
+    /* 🌟 現代極簡毛玻璃待機畫面 */
+    #qrcode-view {
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      height: 100%; width: 100%; padding: 24px; text-align: center; position: relative;
+      background:
+        radial-gradient(circle at 18% 20%, rgba(59, 130, 246, 0.22) 0%, transparent 45%),
+        radial-gradient(circle at 82% 80%, rgba(16, 185, 129, 0.16) 0%, transparent 45%),
+        linear-gradient(145deg, #0f172a 0%, #111827 55%, #020617 100%);
+    }
+
+    #standby-clock {
+      position: absolute; top: 24px; right: 28px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      padding: 8px 16px; border-radius: 20px;
+      font-size: 0.92rem; color: #cbd5e1; font-weight: 600;
+      letter-spacing: 0.5px; font-variant-numeric: tabular-nums;
+    }
+
+    .standby-glass-card {
+      display: flex; align-items: center; gap: 40px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-radius: 28px;
+      padding: 36px 42px;
+      max-width: 860px; width: 92%;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    }
+
+    .standby-qr-col {
+      display: flex; flex-direction: column; align-items: center; flex-shrink: 0;
+    }
+
+    #qrcode {
+      background: #fff; padding: 16px; border-radius: 20px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35), 0 0 0 6px rgba(255, 255, 255, 0.08);
+      margin-bottom: 14px;
+    }
+
+    .qr-hint { font-size: 0.85rem; color: #94a3b8; font-weight: 500; }
+
+    .standby-info-col {
+      flex: 1; text-align: left; display: flex; flex-direction: column; justify-content: center;
+    }
+
+    .standby-badge {
+      display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+      background: rgba(56, 189, 248, 0.15); color: #7dd3fc;
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .standby-title { font-size: 1.75rem; font-weight: 800; color: #f8fafc; margin-bottom: 6px; letter-spacing: -0.4px; }
+    .standby-sub { font-size: 0.9rem; color: #94a3b8; margin-bottom: 18px; }
+
+    .pin-box {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: rgba(15, 23, 42, 0.55); border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 18px; padding: 12px 18px; margin-bottom: 18px;
+    }
+
+    .pin-label { font-size: 0.78rem; color: #94a3b8; margin-bottom: 2px; }
+
+    .pin-code {
+      font-size: 2.8rem; font-weight: 800; letter-spacing: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: linear-gradient(135deg, #60a5fa 0%, #38bdf8 50%, #34d399 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      line-height: 1.1;
+    }
+
+    .copy-link-btn {
+      background: rgba(255, 255, 255, 0.1); color: #e2e8f0;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      padding: 8px 14px; border-radius: 12px; font-size: 0.82rem; font-weight: 600;
+      cursor: pointer; transition: all 0.2s; white-space: nowrap;
+    }
+    .copy-link-btn:hover { background: rgba(59, 130, 246, 0.35); border-color: #60a5fa; color: #fff; }
+
+    .standby-features {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    }
+    .standby-feat-item {
+      background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px; padding: 9px 12px; font-size: 0.82rem; color: #cbd5e1;
+      display: flex; align-items: center; gap: 7px; font-weight: 500;
+    }
+
+    .standby-footer {
+      margin-top: 22px; font-size: 0.82rem; color: #64748b;
+    }
+    .standby-footer a {
+      color: #94a3b8; text-decoration: none; border-bottom: 1px dashed #475569; transition: color 0.15s;
+    }
+    .standby-footer a:hover { color: #60a5fa; border-bottom-color: #60a5fa; }
+
+    @media (max-width: 720px) {
+      .standby-glass-card { flex-direction: column; padding: 24px 20px; gap: 22px; }
+      .standby-info-col { text-align: center; align-items: center; width: 100%; }
+      .standby-badge { align-self: center; }
+      .pin-box { width: 100%; }
+      .pin-code { font-size: 2.2rem; }
+      .standby-features { width: 100%; }
+      #standby-clock { top: 12px; right: 14px; font-size: 0.8rem; padding: 6px 12px; }
+    }
     
     #iframe-view, #media-viewport, #video-container { 
       display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; border: none; background: #000; z-index: 10;
@@ -30,40 +141,53 @@
     #annotation-canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: auto; cursor: crosshair; touch-action: none; user-select: none; -webkit-user-select: none; }
 
     #remote-video { width: 100%; height: 100%; object-fit: contain; }
-    .live-badge { position: absolute; top: 20px; left: 20px; background: rgba(255, 59, 48, 0.9); color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.9rem; z-index: 20; }
+    .live-badge { position: absolute; top: 20px; left: 20px; background: rgba(239, 68, 68, 0.9); backdrop-filter: blur(10px); color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.88rem; z-index: 20; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
     
-    #reset-btn { position: fixed; bottom: 20px; right: 20px; z-index: 999; background: rgba(0,0,0,0.8); color: white; border: 1px solid #555; padding: 10px 20px; border-radius: 20px; cursor: pointer; display: none; }
+    #reset-btn {
+      position: fixed; bottom: 20px; right: 20px; z-index: 999;
+      background: rgba(15, 23, 42, 0.78); color: #f8fafc;
+      border: 1px solid rgba(255, 255, 255, 0.18); padding: 10px 18px;
+      border-radius: 30px; cursor: pointer; display: none; font-weight: 600; font-size: 0.9rem;
+      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); transition: all 0.2s;
+    }
+    #reset-btn:hover { background: rgba(239, 68, 68, 0.85); border-color: rgba(255, 255, 255, 0.35); transform: translateY(-2px); }
 
     /* 大屏底部翻頁列 */
     #screen-pager-bar {
       display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-      background: rgba(0,0,0,0.85); padding: 8px 18px; border-radius: 30px; z-index: 1000;
-      align-items: center; gap: 14px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(15, 23, 42, 0.8); padding: 8px 16px; border-radius: 30px; z-index: 1000;
+      align-items: center; gap: 14px; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,0.18); box-shadow: 0 8px 24px rgba(0,0,0,0.45);
     }
-    .screen-pager-btn { background: #007aff; color: white; border: none; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 0.9rem; cursor: pointer; }
+    .screen-pager-btn { background: linear-gradient(135deg, #007aff, #2563eb); color: white; border: none; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 0.88rem; cursor: pointer; transition: transform 0.15s; }
+    .screen-pager-btn:hover { transform: scale(1.03); }
 
     /* 🌟 大屏右上角工具列（含移動/縮放控制） */
     #screen-draw-toolbar {
-      display: none; position: fixed; top: 20px; right: 20px; background: rgba(0,0,0,0.85);
-      padding: 8px 14px; border-radius: 30px; z-index: 1000; align-items: center; gap: 8px;
-      backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2);
+      display: none; position: fixed; top: 20px; right: 20px;
+      background: rgba(15, 23, 42, 0.8);
+      padding: 8px 12px; border-radius: 30px; z-index: 1000; align-items: center; gap: 8px;
+      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,0.18); box-shadow: 0 8px 24px rgba(0,0,0,0.45);
     }
     .screen-color-btn { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.3); transition: transform 0.15s, box-shadow 0.15s; }
     .screen-color-btn.active { transform: scale(1.22); box-shadow: 0 0 0 2px #fff, 0 0 10px rgba(255,255,255,0.9); }
-    .screen-tool-btn { padding: 5px 12px; border-radius: 15px; border: none; background: #555; color: white; font-size: 0.85rem; font-weight: bold; cursor: pointer; }
+    .screen-tool-btn { padding: 6px 12px; border-radius: 18px; border: none; background: rgba(255,255,255,0.12); color: white; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+    .screen-tool-btn:hover { background: rgba(255,255,255,0.22); }
     .screen-tool-btn.active { background: #ff9500; }
-    .toolbar-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.3); margin: 0 2px; }
+    .toolbar-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.22); margin: 0 2px; }
   
     /* 📁 大屏功能懸浮按鈕樣式 */
 
     .screen-fab-btn {
-      background: rgba(28, 28, 30, 0.88); color: #fff; border: 1px solid rgba(255,255,255,0.25);
-      padding: 10px 18px; border-radius: 30px; font-weight: bold; font-size: 0.95rem;
+      background: rgba(15, 23, 42, 0.78); color: #f8fafc; border: 1px solid rgba(255,255,255,0.18);
+      padding: 10px 18px; border-radius: 30px; font-weight: 600; font-size: 0.92rem;
       cursor: pointer; display: flex; align-items: center; gap: 6px;
-      backdrop-filter: blur(12px); box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-      transition: all 0.2s;
+      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4); transition: all 0.2s;
     }
-    .screen-fab-btn:hover { background: rgba(44, 44, 46, 0.95); transform: translateY(-2px); border-color:#007aff; }
+    .screen-fab-btn:hover { background: rgba(30, 41, 59, 0.92); transform: translateY(-2px); border-color: #60a5fa; }
 
 
     
@@ -117,13 +241,38 @@
 <body>
 
   <div id="qrcode-view">
-    <h2>班務大屏傳屏助手</h2>
-    <p style="color: #aaa; margin-top: 5px;">大屏連線配對碼</p>
-    <div class="pin-code" id="pin-display">------</div>
-    <div id="qrcode"></div>
-    <p>請用手機掃描 QR Code 進行【網址推送 / 影片 / 照片 / PDF / 鏡頭 / 標註】</p>
-    <div style="margin-top: 26px; font-size: 0.82rem; color: #777;">
-      Design by <a href="https://huahua-tools-portal.vercel.app" target="_blank" rel="noopener noreferrer" style="color: #999; text-decoration: none; border-bottom: 1px dashed #666;">華爸的數位魔法</a>
+    <div id="standby-clock">--:--</div>
+
+    <div class="standby-glass-card">
+      <div class="standby-qr-col">
+        <div id="qrcode"></div>
+        <div class="qr-hint">📱 手機相機掃碼立即連線</div>
+      </div>
+
+      <div class="standby-info-col">
+        <div class="standby-badge">✨ 智慧教室・免裝 App 無線投屏</div>
+        <div class="standby-title">班務大屏傳屏助手</div>
+        <div class="standby-sub">請使用手機掃描左側 QR Code，或在遙控端輸入下方配對碼</div>
+
+        <div class="pin-box">
+          <div>
+            <div class="pin-label">大屏連線配對碼 (PIN)</div>
+            <div class="pin-code" id="pin-display">------</div>
+          </div>
+          <button type="button" class="copy-link-btn" onclick="copyMobileConnectUrl()">📋 複製連結</button>
+        </div>
+
+        <div class="standby-features">
+          <div class="standby-feat-item">🌐 雙向網頁與簡報推送</div>
+          <div class="standby-feat-item">🖼️ 照片 / PDF 縮放標註</div>
+          <div class="standby-feat-item">🎥 手機實物相機投影</div>
+          <div class="standby-feat-item">📁 雙向 P2P 多檔快傳</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="standby-footer">
+      Design by <a href="https://huahua-tools-portal.vercel.app" target="_blank" rel="noopener noreferrer">華爸的數位魔法</a>
     </div>
   </div>
 
@@ -319,7 +468,27 @@
 
     document.getElementById('pin-display').innerText = screenId;
     const mobileUrl = `${window.location.origin}/mobile.html?id=${screenId}`;
-    new QRCode(document.getElementById("qrcode"), { text: mobileUrl, width: 200, height: 200 });
+    new QRCode(document.getElementById("qrcode"), { text: mobileUrl, width: 196, height: 196 });
+
+    window.copyMobileConnectUrl = function() {
+      navigator.clipboard.writeText(mobileUrl).then(() => {
+        showScreenFtToast('✅ 已複製手機遙控連線網址！');
+      }).catch(() => {
+        prompt('請複製此手機遙控網址：', mobileUrl);
+      });
+    };
+
+    function updateStandbyClock() {
+      const clockEl = document.getElementById('standby-clock');
+      if (!clockEl) return;
+      const now = new Date();
+      const days = ['日', '一', '二', '三', '四', '五', '六'];
+      const dateStr = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} (${days[now.getDay()]})`;
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      clockEl.innerText = `${dateStr}  ${timeStr}`;
+    }
+    updateStandbyClock();
+    setInterval(updateStandbyClock, 15000);
 
     const canvas = document.getElementById('annotation-canvas');
     const ctx = canvas.getContext('2d');
