@@ -106,6 +106,39 @@
       display: flex; align-items: center; gap: 7px; font-weight: 500;
     }
 
+    .standby-lock-bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      margin-bottom: 14px; padding: 9px 14px; border-radius: 14px;
+      background: rgba(15, 23, 42, 0.48); border: 1px solid rgba(255, 255, 255, 0.14);
+      font-size: 0.82rem; color: #e2e8f0;
+    }
+    .standby-lock-bar.is-locked {
+      background: rgba(245, 158, 11, 0.14); border-color: rgba(251, 191, 36, 0.42); color: #fde68a;
+    }
+    .standby-lock-bar.is-unlocked {
+      background: rgba(16, 185, 129, 0.12); border-color: rgba(52, 211, 153, 0.35); color: #a7f3d0;
+    }
+    .screen-unlock-btn {
+      background: rgba(255, 255, 255, 0.14); color: #fff; border: 1px solid rgba(255, 255, 255, 0.24);
+      padding: 5px 11px; border-radius: 10px; font-size: 0.78rem; font-weight: 600;
+      cursor: pointer; white-space: nowrap; transition: all 0.18s;
+    }
+    .screen-unlock-btn:hover { background: rgba(255, 255, 255, 0.26); }
+
+    #screen-lock-pill {
+      position: fixed; bottom: 20px; right: 175px; z-index: 999;
+      display: none; align-items: center; gap: 6px;
+      background: rgba(15, 23, 42, 0.78); color: #f8fafc;
+      border: 1px solid rgba(255, 255, 255, 0.18); padding: 10px 15px;
+      border-radius: 30px; cursor: pointer; font-weight: 600; font-size: 0.85rem;
+      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); transition: all 0.2s;
+    }
+    #screen-lock-pill.is-locked {
+      background: rgba(180, 83, 9, 0.82); border-color: rgba(251, 191, 36, 0.45);
+    }
+    #screen-lock-pill:hover { transform: translateY(-2px); filter: brightness(1.1); }
+
     .standby-footer {
       margin-top: 22px; font-size: 0.82rem; color: #64748b;
     }
@@ -279,6 +312,11 @@
             <div class="pin-code" id="pin-display">------</div>
           </div>
           <button type="button" class="copy-link-btn" onclick="copyMobileConnectUrl()">📋 複製連結</button>
+        </div>
+
+        <div id="standby-lock-bar" class="standby-lock-bar">
+          <span id="standby-lock-text">🔓 待配對（首位掃碼後將自動開啟鎖定模式）</span>
+          <button type="button" id="standby-unlock-btn" class="screen-unlock-btn" style="display:none;" onclick="unlockFromScreen()">🔓 解除鎖定</button>
         </div>
 
         <div class="standby-features">
@@ -478,11 +516,12 @@
     </div>
   </div>
 
+  <button id="screen-lock-pill" type="button" onclick="unlockFromScreen()" title="大屏鎖定狀態（點擊可解除鎖定並重設主控權限）">🔒 鎖定中</button>
   <button id="reset-btn" onclick="resetScreen()">結束並返回待機</button>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { getDatabase, ref, onValue, set, push, onChildAdded, remove, off, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+    import { getDatabase, ref, onValue, set, push, onChildAdded, remove, off, update, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
     // 🌟 直接引入獨立設定檔
     import { firebaseConfig } from "./firebase-config.js";
@@ -493,6 +532,83 @@
     const urlParams = new URLSearchParams(window.location.search);
     let screenId = urlParams.get('id') || Math.floor(100000 + Math.random() * 900000).toString();
     window.history.replaceState(null, '', `?id=${screenId}`);
+
+    const screenLockRef = ref(db, 'screenLocks/' + screenId);
+    let screenLockState = { exists: true, locked: false, ownerId: null, lockEpoch: 1 };
+
+    function isSenderAuthorized(payload) {
+      if (!screenLockState || !screenLockState.locked || !screenLockState.ownerId) return true;
+      if (!payload) return false;
+      return payload.senderId === screenLockState.ownerId || payload.senderId === 'screen_host';
+    }
+
+    function updateScreenLockUI() {
+      const standbyBar = document.getElementById('standby-lock-bar');
+      const standbyText = document.getElementById('standby-lock-text');
+      const standbyBtn = document.getElementById('standby-unlock-btn');
+      const lockPill = document.getElementById('screen-lock-pill');
+      const inStandby = document.getElementById('qrcode-view').style.display !== 'none';
+
+      const isLockedWithOwner = !!(screenLockState.locked && screenLockState.ownerId);
+      const isOpenWithOwner = !!(!screenLockState.locked && screenLockState.ownerId);
+
+      if (standbyBar && standbyText && standbyBtn) {
+        standbyBar.classList.toggle('is-locked', isLockedWithOwner);
+        standbyBar.classList.toggle('is-unlocked', isOpenWithOwner);
+        if (isLockedWithOwner) {
+          standbyText.innerText = '🔒 已鎖定（主控端已連線，其他裝置無法切換大屏）';
+          standbyBtn.style.display = 'inline-block';
+        } else if (isOpenWithOwner) {
+          standbyText.innerText = '🔓 開放連線模式（允許其他裝置推送與切換）';
+          standbyBtn.style.display = 'none';
+        } else {
+          standbyText.innerText = '🔓 待配對（首位掃碼後將自動開啟鎖定模式）';
+          standbyBtn.style.display = 'none';
+        }
+      }
+
+      if (lockPill) {
+        lockPill.style.display = inStandby ? 'none' : 'flex';
+        lockPill.classList.toggle('is-locked', isLockedWithOwner);
+        lockPill.innerText = isLockedWithOwner ? '🔒 鎖定中' : '🔓 開放中';
+      }
+    }
+
+    runTransaction(screenLockRef, (cur) => {
+      if (cur === null || !cur.exists) {
+        return { exists: true, locked: false, ownerId: null, lockEpoch: 1, createdAt: Date.now() };
+      }
+      return cur;
+    }).catch(err => console.warn('初始化鎖定狀態失敗:', err));
+
+    onValue(screenLockRef, (snap) => {
+      const val = snap.val();
+      if (val && val.exists) {
+        screenLockState = val;
+      } else {
+        screenLockState = { exists: true, locked: false, ownerId: null, lockEpoch: 1 };
+      }
+      updateScreenLockUI();
+    });
+
+    window.unlockFromScreen = function() {
+      if (!screenLockState.locked || !screenLockState.ownerId) {
+        showScreenFtToast('ℹ️ 目前未處於鎖定狀態，任何裝置皆可連線');
+        return;
+      }
+      if (!confirm('確定要在大屏端解除鎖定並重設主控權限嗎？\n解除後，下一位掃碼或連線的手機將取得主控權並重新進入鎖定模式。')) {
+        return;
+      }
+      runTransaction(screenLockRef, (cur) => ({
+        exists: true,
+        locked: false,
+        ownerId: null,
+        lockEpoch: ((cur && cur.lockEpoch) || 1) + 1,
+        updatedAt: Date.now()
+      })).then(() => {
+        showScreenFtToast('🔓 已解除鎖定，等待新主控端連線配對');
+      });
+    };
 
     document.getElementById('pin-display').innerText = screenId;
     const mobileUrl = `${window.location.origin}/mobile.html?id=${screenId}`;
@@ -647,6 +763,12 @@
     onValue(screenRef, async (snapshot) => {
       const data = snapshot.val();
       if (!data) return;
+      if (!isSenderAuthorized(data)) {
+        if (data.mode && data.mode !== 'idle') {
+          showScreenFtToast('🛡️ 鎖定模式：已攔截未授權裝置的切換');
+        }
+        return;
+      }
 
       if (data.mode === 'url' && data.url) {
         const urlKey = `${data.url}_${data.updatedAt || ''}`;
@@ -740,6 +862,7 @@
     onChildAdded(drawEventsRef, (snapshot) => {
       const d = snapshot.val();
       if (d) {
+        if (!isSenderAuthorized(d)) return;
         localDrawHistory.push(d);
         drawStroke(d);
       }
@@ -854,7 +977,8 @@
         x1: x1 / canvas.width, y1: y1 / canvas.height,
         color: screenColor,
         size: size,
-        isEraser: isEraser
+        isEraser: isEraser,
+        senderId: 'screen_host'
       });
     }
 
@@ -1206,6 +1330,7 @@
       document.getElementById('media-viewport').style.display = type === 'photo' ? 'block' : 'none';
       document.getElementById('video-container').style.display = type === 'video' ? 'block' : 'none';
       document.getElementById('reset-btn').style.display = 'block';
+      updateScreenLockUI();
     }
 
     function resetUI() {
@@ -1236,11 +1361,19 @@
       document.getElementById('screen-draw-toolbar').style.display = 'none';
       document.getElementById('qrcode-view').style.display = 'flex';
       document.getElementById('reset-btn').style.display = 'none';
+      updateScreenLockUI();
     }
 
     window.resetScreen = function() {
       remove(screenRef);
-      set(screenRef, { mode: 'idle' });
+      set(screenRef, { mode: 'idle', senderId: 'screen_host' });
+      runTransaction(screenLockRef, (cur) => ({
+        exists: true,
+        locked: false,
+        ownerId: null,
+        lockEpoch: ((cur && cur.lockEpoch) || 1) + 1,
+        updatedAt: Date.now()
+      }));
       resetUI();
     };
     let isScreenTbExpanded = false;
@@ -1348,6 +1481,7 @@ function setToolbarToMinimized() {
       onValue(offerRef, async (snapshot) => {
         const val = snapshot.val();
         if (!val || !val.sdp || (val.timestamp === lastOfferTime && val.sdp === lastOfferSdp)) return;
+        if (!isSenderAuthorized(val)) return;
         lastOfferTime = val.timestamp || Date.now();
         lastOfferSdp = val.sdp;
 
@@ -1781,7 +1915,7 @@ function setToolbarToMinimized() {
       }
       if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
 
-      set(screenRef, { mode: 'url', url: url, updatedAt: Date.now() });
+      set(screenRef, { mode: 'url', url: url, senderId: 'screen_host', updatedAt: Date.now() });
       toggleScreenUrlModal(false);
       showScreenFtToast(`📺 大屏載入網頁中...`);
     };

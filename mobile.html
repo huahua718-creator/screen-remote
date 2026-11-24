@@ -56,6 +56,101 @@
       color: #15803d;
       border-color: rgba(34, 197, 94, 0.3);
     }
+    .room-pill.locked-owner {
+      background: rgba(245, 158, 11, 0.16);
+      color: #b45309;
+      border-color: rgba(245, 158, 11, 0.38);
+    }
+    .room-pill.blocked {
+      background: rgba(239, 68, 68, 0.15);
+      color: #dc2626;
+      border-color: rgba(239, 68, 68, 0.38);
+    }
+
+    .lock-control-bar {
+      display: none;
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .lock-control-bar.is-unlocked {
+      background: #f0fdf4;
+      border-color: #bbf7d0;
+    }
+    .lock-info-title {
+      font-size: 0.84rem;
+      font-weight: 800;
+      color: #92400e;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .lock-control-bar.is-unlocked .lock-info-title { color: #166534; }
+    .lock-info-sub {
+      font-size: 0.74rem;
+      color: #78350f;
+      margin-top: 2px;
+      line-height: 1.35;
+    }
+    .lock-control-bar.is-unlocked .lock-info-sub { color: #15803d; }
+
+    .lock-toggle-btn {
+      padding: 7px 12px;
+      border-radius: 10px;
+      border: none;
+      background: #f59e0b;
+      color: #fff;
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px rgba(245, 158, 11, 0.25);
+      transition: transform 0.15s, background 0.2s;
+    }
+    .lock-control-bar.is-unlocked .lock-toggle-btn {
+      background: #0ea5e9;
+      box-shadow: 0 2px 8px rgba(14, 165, 233, 0.25);
+    }
+    .lock-toggle-btn:active { transform: scale(0.96); }
+
+    .lock-notice-box {
+      display: none;
+      margin-top: 10px;
+      padding: 11px 13px;
+      border-radius: 12px;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+    .lock-notice-box.blocked {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #b91c1c;
+    }
+    .lock-notice-box.guest-open {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1d4ed8;
+    }
+    .lock-notice-box.reclaim {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      color: #334155;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .controls-locked {
+      opacity: 0.42;
+      pointer-events: none;
+      user-select: none;
+      filter: grayscale(0.35);
+    }
 
     .card {
       background: rgba(255, 255, 255, 0.88);
@@ -256,7 +351,33 @@
       <label for="room-input">大屏房間碼 (PIN)：</label>
       <div class="room-row">
         <input type="text" id="room-input" placeholder="例如：839201" oninput="onRoomIdChanged()" onchange="onRoomIdChanged()">
-        <button type="button" class="compact-stop-btn" onclick="resetRemoteScreen()" title="結束大屏投放並返回待機">⏹️ 結束投放</button>
+        <button type="button" id="compact-stop-btn" class="compact-stop-btn" onclick="resetRemoteScreen()" title="結束大屏投放並返回待機">⏹️ 結束投放</button>
+      </div>
+
+      <!-- 主控端專用：鎖定模式切換列 -->
+      <div id="mobile-lock-bar" class="lock-control-bar">
+        <div>
+          <div id="mobile-lock-title" class="lock-info-title">🔒 鎖定模式（已開啟）</div>
+          <div id="mobile-lock-sub" class="lock-info-sub">僅此手機可控制，其他裝置無法連線切換</div>
+        </div>
+        <button type="button" id="mobile-lock-toggle-btn" class="lock-toggle-btn" onclick="toggleRoomLockMode()">🔓 切換開放</button>
+      </div>
+
+      <!-- 非主控端被鎖定時的提示卡片 -->
+      <div id="mobile-locked-notice" class="lock-notice-box blocked">
+        <strong>🔒 大屏目前已開啟「鎖定模式」</strong><br>
+        已由主控端手機連線鎖定，其他裝置目前無法連線或切換畫面。請於主控端手機切換為開放模式後再試。
+      </div>
+
+      <!-- 開放模式下，訪客裝置的狀態提示 -->
+      <div id="mobile-guest-unlocked-notice" class="lock-notice-box guest-open">
+        <strong>🔓 目前為開放連線模式</strong>：主控端已允許其他裝置連線推送內容至此大屏。
+      </div>
+
+      <!-- 大屏端曾返回待機／解除鎖定時的重新配對按鈕 -->
+      <div id="mobile-reclaim-bar" class="lock-notice-box reclaim">
+        <span>🔓 大屏目前已解除鎖定並待機中</span>
+        <button type="button" class="lock-toggle-btn" style="background:#007aff;" onclick="claimRoomControl()">🔒 取得主控並鎖定</button>
       </div>
     </div>
 
@@ -487,7 +608,7 @@
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { getDatabase, ref, set, onValue, push, onChildAdded, remove, off, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+    import { getDatabase, ref, set, onValue, push, onChildAdded, remove, off, update, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -496,6 +617,18 @@
 
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
+
+    function getOrCreateMobileClientId() {
+      let id = localStorage.getItem('screenRemoteClientId');
+      if (!id) {
+        id = (window.crypto && typeof crypto.randomUUID === 'function')
+          ? crypto.randomUUID()
+          : 'm_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem('screenRemoteClientId', id);
+      }
+      return id;
+    }
+    const mobileClientId = getOrCreateMobileClientId();
 
     const urlParams = new URLSearchParams(window.location.search);
     document.getElementById('room-input').value = urlParams.get('id') || '';
@@ -520,25 +653,146 @@
     const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
     let currentListeningRoom = '';
+    let mobileLockRef = null;
+    let currentRoomLockState = null;
+    let autoClaimAttemptedRoom = '';
+    let activeListenersRoomId = '';
     let mobileDrawChildRef = null;
     let mobileDrawValRef = null;
     let ftReqRef = null;
     let pushedUrlRef = null;
 
-    window.onRoomIdChanged = function() {
-      const id = getScreenId(false);
+    function isRoomBlockedByLock() {
+      return !!(
+        currentRoomLockState &&
+        currentRoomLockState.locked &&
+        currentRoomLockState.ownerId &&
+        currentRoomLockState.ownerId !== mobileClientId
+      );
+    }
+
+    function ensureRoomAuthorized(showAlert = true) {
+      const screenId = getScreenId(showAlert);
+      if (!screenId) return false;
+      if (isRoomBlockedByLock()) {
+        if (showAlert) {
+          alert('🔒 此大屏目前處於「鎖定模式」，僅限主控端手機操作或解除鎖定後才可切換！');
+        }
+        return false;
+      }
+      return true;
+    }
+
+    function detachRoomActionListeners() {
+      activeListenersRoomId = '';
+      if (requestPageRef) { off(requestPageRef); requestPageRef = null; }
+      if (ftReqRef) { off(ftReqRef); ftReqRef = null; }
+      if (pushedUrlRef) { off(pushedUrlRef); pushedUrlRef = null; }
+      if (mobileDrawChildRef) { off(mobileDrawChildRef); mobileDrawChildRef = null; }
+      if (mobileDrawValRef) { off(mobileDrawValRef); mobileDrawValRef = null; }
+    }
+
+    function forceReleaseUnauthorizedMedia() {
+      if (typeof stopWebRTC === 'function' && localStream) {
+        stopWebRTC();
+      }
+      if (typeof closeDrawFullscreen === 'function' && typeof isDrawFullscreen !== 'undefined' && isDrawFullscreen) {
+        closeDrawFullscreen();
+      }
+      if (typeof ftAnswerListener !== 'undefined' && ftAnswerListener) { off(ftAnswerListener); ftAnswerListener = null; }
+      if (typeof ftCalleeListener !== 'undefined' && ftCalleeListener) { off(ftCalleeListener); ftCalleeListener = null; }
+      if (typeof ftPeerConnection !== 'undefined' && ftPeerConnection) {
+        try { ftPeerConnection.close(); } catch (e) {}
+        ftPeerConnection = null;
+        ftDataChannel = null;
+        if (typeof updateMobileFtStatus === 'function') updateMobileFtStatus('disconnected');
+      }
+    }
+
+    function updateMobileLockUI(roomId) {
       const pill = document.getElementById('room-status-pill');
-      if (pill) {
-        if (id) {
-          pill.classList.add('connected');
-          pill.innerText = `🟢 房間 #${id}`;
-        } else {
-          pill.classList.remove('connected');
+      const lockBar = document.getElementById('mobile-lock-bar');
+      const lockTitle = document.getElementById('mobile-lock-title');
+      const lockSub = document.getElementById('mobile-lock-sub');
+      const lockToggleBtn = document.getElementById('mobile-lock-toggle-btn');
+      const lockedNotice = document.getElementById('mobile-locked-notice');
+      const guestNotice = document.getElementById('mobile-guest-unlocked-notice');
+      const reclaimBar = document.getElementById('mobile-reclaim-bar');
+
+      if (!roomId) {
+        if (pill) {
+          pill.className = 'room-pill';
           pill.innerText = '⚪ 未輸入房間碼';
         }
+        if (lockBar) lockBar.style.display = 'none';
+        if (lockedNotice) lockedNotice.style.display = 'none';
+        if (guestNotice) guestNotice.style.display = 'none';
+        if (reclaimBar) reclaimBar.style.display = 'none';
+        document.querySelectorAll('.nav-tabs, .tab-content, #compact-stop-btn').forEach(el => el.classList.remove('controls-locked'));
+        return;
       }
-      if (!id || id === currentListeningRoom) return;
-      currentListeningRoom = id;
+
+      if (!currentRoomLockState || !currentRoomLockState.exists) {
+        if (pill) {
+          pill.className = 'room-pill';
+          pill.innerText = roomId.length >= 6 ? `🟡 等待大屏啟動 #${roomId}` : '⚪ 請輸入完整房間碼';
+        }
+        if (lockBar) lockBar.style.display = 'none';
+        if (lockedNotice) lockedNotice.style.display = 'none';
+        if (guestNotice) guestNotice.style.display = 'none';
+        if (reclaimBar) reclaimBar.style.display = 'none';
+        document.querySelectorAll('.nav-tabs, .tab-content, #compact-stop-btn').forEach(el => el.classList.remove('controls-locked'));
+        return;
+      }
+
+      const ownerId = currentRoomLockState.ownerId;
+      const isLocked = !!currentRoomLockState.locked;
+      const isOwner = ownerId === mobileClientId;
+      const isBlocked = isLocked && !!ownerId && !isOwner;
+
+      if (pill) {
+        pill.className = 'room-pill';
+        if (isBlocked) {
+          pill.classList.add('blocked');
+          pill.innerText = `🔒 #${roomId} 已鎖定`;
+        } else if (isOwner && isLocked) {
+          pill.classList.add('locked-owner');
+          pill.innerText = `🔒 #${roomId} 主控鎖定`;
+        } else if (ownerId) {
+          pill.classList.add('connected');
+          pill.innerText = `🔓 #${roomId} 開放中`;
+        } else {
+          pill.classList.add('connected');
+          pill.innerText = `🟢 #${roomId} 已就緒`;
+        }
+      }
+
+      if (lockBar) {
+        if (isOwner) {
+          lockBar.style.display = 'flex';
+          lockBar.classList.toggle('is-unlocked', !isLocked);
+          if (lockTitle) lockTitle.innerText = isLocked ? '🔒 鎖定模式（已開啟）' : '🔓 開放模式（已解鎖）';
+          if (lockSub) lockSub.innerText = isLocked
+            ? '預設防搗蛋保護：僅此手機可操作，其他裝置無法切換'
+            : '目前已開放：允許其他裝置輸入房間碼連線與推送';
+          if (lockToggleBtn) lockToggleBtn.innerText = isLocked ? '🔓 切換開放' : '🔒 切換鎖定';
+        } else {
+          lockBar.style.display = 'none';
+        }
+      }
+
+      if (lockedNotice) lockedNotice.style.display = isBlocked ? 'block' : 'none';
+      if (guestNotice) guestNotice.style.display = (!isBlocked && !isOwner && !!ownerId && !isLocked) ? 'block' : 'none';
+      if (reclaimBar) reclaimBar.style.display = (!ownerId && autoClaimAttemptedRoom === roomId) ? 'flex' : 'none';
+
+      document.querySelectorAll('.nav-tabs, .tab-content, #compact-stop-btn').forEach(el => {
+        el.classList.toggle('controls-locked', isBlocked);
+      });
+    }
+
+    function attachAuthorizedRoomListeners(roomId) {
+      if (!roomId || activeListenersRoomId === roomId) return;
+      activeListenersRoomId = roomId;
       listenToPageRequests();
       listenToScreenFtRequests();
       listenToIncomingUrlsFromScreen();
@@ -547,6 +801,93 @@
       if (fileTab && fileTab.classList.contains('active') && typeof ensureMobileFtConnection === 'function') {
         ensureMobileFtConnection(false);
       }
+    }
+
+    function claimOwnershipTransaction(roomId) {
+      const targetLockRef = ref(db, 'screenLocks/' + roomId);
+      return runTransaction(targetLockRef, (cur) => {
+        if (!cur || !cur.exists) return cur;
+        if (!cur.ownerId) {
+          return {
+            ...cur,
+            locked: true,
+            ownerId: mobileClientId,
+            claimedAt: Date.now()
+          };
+        }
+        return cur;
+      }).catch(err => console.warn('鎖定主控配對失敗:', err));
+    }
+
+    window.claimRoomControl = function() {
+      const screenId = getScreenId(true);
+      if (!screenId) return;
+      claimOwnershipTransaction(screenId);
+    };
+
+    window.toggleRoomLockMode = function() {
+      const screenId = getScreenId(true);
+      if (!screenId) return;
+      if (!currentRoomLockState || currentRoomLockState.ownerId !== mobileClientId) {
+        alert('僅限主控端手機可切換鎖定模式！');
+        return;
+      }
+      const nextLocked = !currentRoomLockState.locked;
+      update(ref(db, 'screenLocks/' + screenId), {
+        locked: nextLocked,
+        updatedAt: Date.now()
+      });
+    };
+
+    function listenToRoomLock(targetId) {
+      if (mobileLockRef) { off(mobileLockRef); mobileLockRef = null; }
+      mobileLockRef = ref(db, 'screenLocks/' + targetId);
+      onValue(mobileLockRef, (snap) => {
+        if (targetId !== currentListeningRoom) return;
+        const val = snap.val();
+        if (!val || !val.exists) {
+          currentRoomLockState = null;
+          detachRoomActionListeners();
+          updateMobileLockUI(targetId);
+          return;
+        }
+
+        if (!val.ownerId && autoClaimAttemptedRoom !== targetId) {
+          autoClaimAttemptedRoom = targetId;
+          claimOwnershipTransaction(targetId);
+          return;
+        }
+
+        currentRoomLockState = val;
+        updateMobileLockUI(targetId);
+
+        if (isRoomBlockedByLock()) {
+          detachRoomActionListeners();
+          forceReleaseUnauthorizedMedia();
+        } else {
+          attachAuthorizedRoomListeners(targetId);
+        }
+      });
+    }
+
+    window.onRoomIdChanged = function() {
+      const id = getScreenId(false);
+      if (!id) {
+        currentListeningRoom = '';
+        autoClaimAttemptedRoom = '';
+        currentRoomLockState = null;
+        if (mobileLockRef) { off(mobileLockRef); mobileLockRef = null; }
+        detachRoomActionListeners();
+        updateMobileLockUI('');
+        return;
+      }
+      if (id === currentListeningRoom) return;
+      currentListeningRoom = id;
+      autoClaimAttemptedRoom = '';
+      currentRoomLockState = null;
+      detachRoomActionListeners();
+      updateMobileLockUI(id);
+      listenToRoomLock(id);
     };
 
     // 監聽大屏傳來的翻頁要求
@@ -622,7 +963,8 @@
     };
 
     window.sendUrl = function() {
-      const screenId = getScreenId(); if (!screenId) return;
+      if (!ensureRoomAuthorized(true)) return;
+      const screenId = getScreenId(false); if (!screenId) return;
       stopWebRTC();
       let url = document.getElementById('url-input').value.trim();
       const name = document.getElementById('url-name-input').value.trim();
@@ -630,11 +972,12 @@
         if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
         saveToHistory(url, name);
       }
-      set(ref(db, 'screens/' + screenId), { mode: 'url', url: url, updatedAt: Date.now() });
+      set(ref(db, 'screens/' + screenId), { mode: 'url', url: url, senderId: mobileClientId, updatedAt: Date.now() });
     };
 
     // 多圖選取
     window.handleGallerySelect = async function(e) {
+      if (!ensureRoomAuthorized(true)) { e.target.value = ''; return; }
       const files = Array.from(e.target.files);
       if (files.length === 0) return;
 
@@ -684,7 +1027,8 @@
       stopWebRTC();
       setPadBackground(dataUrl);
 
-      const screenId = getScreenId(); if (!screenId) return;
+      const screenId = getScreenId(false);
+      if (!ensureRoomAuthorized(true) || !screenId) return;
       remove(ref(db, `screens/${screenId}/drawEvents`));
       update(ref(db, 'screens/' + screenId), {
         mode: 'photo',
@@ -693,6 +1037,7 @@
         photoTotal: photoList.length,
         mediaSubtype: 'photo',
         requestPage: currentPhotoIndex + 1,
+        senderId: mobileClientId,
         updatedAt: Date.now()
       }).then(() => {
         document.getElementById('draw-tab-btn').click();
@@ -704,6 +1049,7 @@
 
     // PDF 文件處理
     window.handlePdfSelect = async function(e) {
+      if (!ensureRoomAuthorized(true)) { e.target.value = ''; return; }
       const file = e.target.files[0];
       if (!file) return;
 
@@ -738,7 +1084,8 @@
       stopWebRTC();
       setPadBackground(dataUrl);
 
-      const screenId = getScreenId(); if (!screenId) return;
+      const screenId = getScreenId(false);
+      if (!ensureRoomAuthorized(true) || !screenId) return;
       remove(ref(db, `screens/${screenId}/drawEvents`));
       update(ref(db, 'screens/' + screenId), {
         mode: 'photo',
@@ -747,6 +1094,7 @@
         photoTotal: pdfDoc.numPages,
         mediaSubtype: 'pdf',
         requestPage: pageNum,
+        senderId: mobileClientId,
         updatedAt: Date.now()
       }).then(() => {
         document.getElementById('draw-tab-btn').click();
@@ -777,9 +1125,10 @@
 
     // P2P 影片檔推送
     window.handleVideoFileSelect = async function(e) {
+      if (!ensureRoomAuthorized(true)) { e.target.value = ''; return; }
       const file = e.target.files[0];
       if (!file) return;
-      const screenId = getScreenId(); if (!screenId) return;
+      const screenId = getScreenId(false); if (!screenId) return;
 
       closePeerConnection();
       await remove(ref(db, 'screens/' + screenId));
@@ -853,7 +1202,8 @@
       await update(ref(db, `screens/${screenId}`), {
         mode: 'webrtc',
         mediaType: 'video-file-datachannel',
-        offer: { type: offer.type, sdp: offer.sdp }
+        offer: { type: offer.type, sdp: offer.sdp },
+        senderId: mobileClientId
       });
 
       answerRef = ref(db, `screens/${screenId}/answer`);
@@ -877,6 +1227,7 @@
     let isRecording = false;
     // 1. 修改鏡頭啟動邏輯（同時申請影音權限，但預設聲音關閉）
 window.startWebRTC = async function(type) {
+  if (!ensureRoomAuthorized(true)) return;
   try {
     const constraints = type === 'camera' 
       ? { 
@@ -900,7 +1251,7 @@ window.startWebRTC = async function(type) {
     }
 
     closePeerConnection();
-    const screenId = getScreenId(); if (!screenId) return;
+    const screenId = getScreenId(false); if (!screenId) return;
     await remove(ref(db, 'screens/' + screenId));
 
     peerConnection = new RTCPeerConnection(rtcConfig);
@@ -928,7 +1279,8 @@ window.startWebRTC = async function(type) {
     await update(ref(db, `screens/${screenId}`), {
       mode: 'webrtc',
       mediaType: type,
-      offer: { type: offer.type, sdp: offer.sdp }
+      offer: { type: offer.type, sdp: offer.sdp },
+      senderId: mobileClientId
     });
 
     answerRef = ref(db, `screens/${screenId}/answer`);
@@ -1095,7 +1447,8 @@ function stopCurrentRecorder(callback) {
     };
 
     window.pushSnapshotToScreen = function() {
-      const screenId = getScreenId(); if (!screenId) return;
+      if (!ensureRoomAuthorized(true)) return;
+      const screenId = getScreenId(false); if (!screenId) return;
       const video = document.getElementById('local-preview');
       if (!video || !video.srcObject) return;
 
@@ -1113,7 +1466,7 @@ function stopCurrentRecorder(callback) {
       setPadBackground(dataUrl);
 
       remove(ref(db, `screens/${screenId}/drawEvents`));
-      set(ref(db, 'screens/' + screenId), { mode: 'photo', photoUrl: dataUrl, updatedAt: Date.now() }).then(() => {
+      set(ref(db, 'screens/' + screenId), { mode: 'photo', photoUrl: dataUrl, senderId: mobileClientId, updatedAt: Date.now() }).then(() => {
         document.getElementById('draw-tab-btn').click();
       });
     };
@@ -1241,19 +1594,21 @@ function stopCurrentRecorder(callback) {
 
     function pushMobileStroke(targetElement, x0, y0, x1, y1, size, isEraser) {
       const screenId = getScreenId(false);
-      if (!screenId || !targetElement.width || !targetElement.height) return;
+      if (!ensureRoomAuthorized(false) || !screenId || !targetElement.width || !targetElement.height) return;
       push(ref(db, `screens/${screenId}/drawEvents`), {
         x0: x0 / targetElement.width, y0: y0 / targetElement.height,
         x1: x1 / targetElement.width, y1: y1 / targetElement.height,
         color: currentColor,
         size: size,
-        isEraser: isEraser
+        isEraser: isEraser,
+        senderId: mobileClientId
       });
     }
 
     function handleStart(e, targetElement) {
       if (e.type === 'touchstart') e.preventDefault();
-      const sid = getScreenId(true);
+      if (!ensureRoomAuthorized(true)) { drawing = false; return; }
+      const sid = getScreenId(false);
       if (!sid) { drawing = false; return; }
 
       const rect = targetElement.getBoundingClientRect();
@@ -1465,7 +1820,8 @@ function stopCurrentRecorder(callback) {
     }
 
     window.clearCanvas = function() {
-      const screenId = getScreenId(); if (!screenId) return;
+      if (!ensureRoomAuthorized(true)) return;
+      const screenId = getScreenId(false); if (!screenId) return;
       pCtx.clearRect(0, 0, pad.width, pad.height);
       lCtx.clearRect(0, 0, liveCanvas.width, liveCanvas.height);
       if (typeof fsCtx !== 'undefined' && typeof fsPad !== 'undefined') {
@@ -1491,15 +1847,17 @@ function stopCurrentRecorder(callback) {
       if (stopBtn) stopBtn.style.display = isRunning ? 'block' : 'none';
     }
     window.resetRemoteScreen = function() {
-  const screenId = getScreenId();
+  if (!ensureRoomAuthorized(true)) return;
+  const screenId = getScreenId(false);
   if (!screenId) return;
   
   if (confirm('確定要結束大屏當前投放，讓大屏返回待機 QR Code 畫面嗎？')) {
     stopWebRTC(); // 若手機正在開鏡頭/麥克風，先停止本地傳輸
     
-    // 傳送 idle 指令給 Firebase，大屏收到後會立刻重設畫面
+    // 傳送 idle 指令給 Firebase，大屏收到後會立刻重設畫面（保留鎖定狀態）
     set(ref(db, 'screens/' + screenId), {
       mode: 'idle',
+      senderId: mobileClientId,
       updatedAt: Date.now()
     }).then(() => {
       alert('已成功讓大屏返回待機畫面！');
@@ -1635,7 +1993,8 @@ fsPad.addEventListener('mouseleave', e => handleEnd(e, fsPad));
     // 手機作為 Caller 發起 WebRTC DataChannel 連線
     let ftConnectTimeout = null;
     window.ensureMobileFtConnection = async function(userTriggered = false) {
-      const screenId = getScreenId(userTriggered);
+      if (!ensureRoomAuthorized(userTriggered)) return false;
+      const screenId = getScreenId(false);
       if (!screenId) return false;
 
       if (ftDataChannel && ftDataChannel.readyState === 'open') {
@@ -1723,6 +2082,7 @@ fsPad.addEventListener('mouseleave', e => handleEnd(e, fsPad));
         await set(ref(db, `screens/${screenId}/fileTransfer/offer`), {
           sdp: offer.sdp,
           type: offer.type,
+          senderId: mobileClientId,
           timestamp: Date.now()
         });
 
@@ -1857,8 +2217,9 @@ fsPad.addEventListener('mouseleave', e => handleEnd(e, fsPad));
 
     // 手機端發送檔案至大屏
     window.sendMobileFiles = async function() {
+      if (!ensureRoomAuthorized(true)) return;
       if (mobileSelectedFiles.length === 0) return;
-      const screenId = getScreenId();
+      const screenId = getScreenId(false);
       if (!screenId) return;
 
       const progressBox = document.getElementById('mobile-send-progress-box');
