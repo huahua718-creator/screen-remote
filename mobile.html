@@ -187,6 +187,25 @@
       border: none; padding: 6px 10px; border-radius: 18px; font-size: 1.05rem; 
       font-weight: bold; color: white; cursor: pointer; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; 
     }
+    #mobile-eraser-ring {
+      display: none;
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 10000;
+      transform: translate(-50%, -50%);
+      box-sizing: border-box;
+    }
+    #mobile-eraser-ring svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      overflow: visible;
+    }
 
     #progress-container { display: none; margin-top: 10px; background: #e2e8f0; border-radius: 10px; overflow: hidden; height: 10px; }
     #progress-bar { width: 0%; height: 100%; background: linear-gradient(90deg, #22c55e, #16a34a); transition: width 0.1s; }
@@ -455,6 +474,15 @@
     <button class="float-btn" style="background:#8e8e93;" onclick="clearPhotoBackground()" title="移除背景照片">🗑️</button>
     <button class="float-btn" style="background:#e0245e;" onclick="closeDrawFullscreen()" title="退出全螢幕">↙️</button>
   </div>
+  </div>
+
+  <!-- 🌟 橡皮擦範圍圓形虛線指示器 -->
+  <div id="mobile-eraser-ring" aria-hidden="true">
+    <svg viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="48" fill="rgba(255, 255, 255, 0.14)" stroke="rgba(15, 23, 42, 0.78)" stroke-width="5" stroke-dasharray="10 7" vector-effect="non-scaling-stroke" />
+      <circle cx="50" cy="50" r="48" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-dasharray="10 7" vector-effect="non-scaling-stroke" />
+      <circle cx="50" cy="50" r="2.5" fill="#ffffff" stroke="rgba(15, 23, 42, 0.85)" stroke-width="1" />
+    </svg>
   </div>
 
   <script type="module">
@@ -1124,33 +1152,73 @@ function stopCurrentRecorder(callback) {
       }
     };
 
+    const MOBILE_TOOLBAR_ERASER_DIA = 32;
+    const mobileEraserRing = document.getElementById('mobile-eraser-ring');
+    let isMobileMultiErasing = false;
+    let mobileMultiEraserDia = 56;
+    let isMobileTouchMulti = false;
+    let pendingMobileTap = false;
+
+    function showMobileEraserRing(clientX, clientY, diameterPx) {
+      if (!mobileEraserRing) return;
+      mobileEraserRing.style.left = `${clientX}px`;
+      mobileEraserRing.style.top = `${clientY}px`;
+      mobileEraserRing.style.width = `${diameterPx}px`;
+      mobileEraserRing.style.height = `${diameterPx}px`;
+      mobileEraserRing.style.display = 'block';
+    }
+
+    function hideMobileEraserRing() {
+      if (mobileEraserRing) mobileEraserRing.style.display = 'none';
+    }
+
+    function syncMobileEraserButtons(active) {
+      const eraserBtn = document.getElementById('eraser-btn');
+      const fsEraserBtn = document.getElementById('fs-eraser-btn');
+      const liveEraserBtn = document.getElementById('live-eraser-btn');
+      if (eraserBtn) eraserBtn.classList.toggle('active', active);
+      if (liveEraserBtn) liveEraserBtn.classList.toggle('active', active);
+      if (fsEraserBtn) fsEraserBtn.style.background = active ? '#ff9500' : '#555';
+    }
+
+    function syncMobileCanvasCursors() {
+      const cur = isEraserMode ? 'none' : 'crosshair';
+      [document.getElementById('draw-pad'), document.getElementById('live-draw-canvas'), document.getElementById('fs-draw-pad')].forEach(el => {
+        if (el) el.style.cursor = cur;
+      });
+    }
+
+    function getMobileTouchMetrics(touches) {
+      const len = touches.length;
+      let sumX = 0, sumY = 0;
+      for (let i = 0; i < len; i++) {
+        sumX += touches[i].clientX;
+        sumY += touches[i].clientY;
+      }
+      const avgX = sumX / len;
+      const avgY = sumY / len;
+      let maxDist = 0;
+      for (let i = 0; i < len; i++) {
+        const d = Math.hypot(touches[i].clientX - avgX, touches[i].clientY - avgY);
+        if (d > maxDist) maxDist = d;
+      }
+      const spreadDia = Math.round(Math.min(Math.max(48, maxDist * 1.45), 96));
+      return { avgX, avgY, spreadDia };
+    }
+
     window.selectPen = function(color) {
   isEraserMode = false;
   currentColor = color;
-  
-  const eraserBtn = document.getElementById('eraser-btn');
-  const fsEraserBtn = document.getElementById('fs-eraser-btn');
-  const liveEraserBtn = document.getElementById('live-eraser-btn');
-
-  if (eraserBtn) eraserBtn.classList.remove('active');
-  if (liveEraserBtn) liveEraserBtn.classList.remove('active');
-  if (fsEraserBtn) fsEraserBtn.style.background = '#555';
+  hideMobileEraserRing();
+  syncMobileEraserButtons(false);
+  syncMobileCanvasCursors();
 };
 
    window.toggleEraser = function() {
   isEraserMode = !isEraserMode;
-  
-  // 同步一般模式、全螢幕模式、實時鏡頭模式的橡皮擦狀態
-  const eraserBtn = document.getElementById('eraser-btn');
-  const fsEraserBtn = document.getElementById('fs-eraser-btn');
-  const liveEraserBtn = document.getElementById('live-eraser-btn');
-
-  if (eraserBtn) eraserBtn.classList.toggle('active', isEraserMode);
-  if (liveEraserBtn) liveEraserBtn.classList.toggle('active', isEraserMode);
-  
-  if (fsEraserBtn) {
-    fsEraserBtn.style.background = isEraserMode ? '#ff9500' : '#555';
-  }
+  if (!isEraserMode) hideMobileEraserRing();
+  syncMobileEraserButtons(isEraserMode);
+  syncMobileCanvasCursors();
 };
 
     // 畫布塗鴉雙向同步
@@ -1171,50 +1239,182 @@ function stopCurrentRecorder(callback) {
       liveCanvas.height = window.innerHeight;
     }
 
+    function pushMobileStroke(targetElement, x0, y0, x1, y1, size, isEraser) {
+      const screenId = getScreenId(false);
+      if (!screenId || !targetElement.width || !targetElement.height) return;
+      push(ref(db, `screens/${screenId}/drawEvents`), {
+        x0: x0 / targetElement.width, y0: y0 / targetElement.height,
+        x1: x1 / targetElement.width, y1: y1 / targetElement.height,
+        color: currentColor,
+        size: size,
+        isEraser: isEraser
+      });
+    }
+
     function handleStart(e, targetElement) {
+      if (e.type === 'touchstart') e.preventDefault();
       const sid = getScreenId(true);
       if (!sid) { drawing = false; return; }
-      drawing = true;
+
       const rect = targetElement.getBoundingClientRect();
+      const scaleX = rect.width ? (targetElement.width / rect.width) : 1;
+      const scaleY = rect.height ? (targetElement.height / rect.height) : 1;
+
+      if (e.touches && e.touches.length >= 3) {
+        pendingMobileTap = false;
+        isMobileTouchMulti = true;
+        isMobileMultiErasing = true;
+        drawing = true;
+        const { avgX, avgY, spreadDia } = getMobileTouchMetrics(e.touches);
+        mobileMultiEraserDia = spreadDia;
+        lastX = (avgX - rect.left) * scaleX;
+        lastY = (avgY - rect.top) * scaleY;
+        const ringDia = mobileMultiEraserDia * (rect.width ? (rect.width / targetElement.width) : 1);
+        showMobileEraserRing(avgX, avgY, ringDia);
+        syncMobileEraserButtons(true);
+        pushMobileStroke(targetElement, lastX, lastY, lastX + 0.1, lastY + 0.1, mobileMultiEraserDia, true);
+        return;
+      }
+
+      if (e.touches && e.touches.length >= 2) {
+        pendingMobileTap = false;
+        isMobileTouchMulti = true;
+        if (!isMobileMultiErasing) {
+          drawing = false;
+          hideMobileEraserRing();
+        }
+        return;
+      }
+
+      if (isMobileTouchMulti || isMobileMultiErasing) return;
+
+      drawing = true;
       const touch = e.touches ? e.touches[0] : e;
-      lastX = touch.clientX - rect.left;
-      lastY = touch.clientY - rect.top;
+      lastX = (touch.clientX - rect.left) * scaleX;
+      lastY = (touch.clientY - rect.top) * scaleY;
+
+      if (isEraserMode) {
+        const ringDia = MOBILE_TOOLBAR_ERASER_DIA * (rect.width ? (rect.width / targetElement.width) : 1);
+        showMobileEraserRing(touch.clientX, touch.clientY, ringDia);
+      } else {
+        hideMobileEraserRing();
+      }
+
+      if (e.touches) {
+        pendingMobileTap = true;
+      } else {
+        pendingMobileTap = false;
+        pushMobileStroke(targetElement, lastX, lastY, lastX + 0.1, lastY + 0.1, isEraserMode ? MOBILE_TOOLBAR_ERASER_DIA : 4.5, isEraserMode);
+      }
     }
 
     function handleMove(e, targetCtx, targetElement) {
-      if (!drawing) return;
-      const screenId = getScreenId(false); if (!screenId) return;
+      if (e.type === 'touchmove') e.preventDefault();
       const rect = targetElement.getBoundingClientRect();
+      const scaleX = rect.width ? (targetElement.width / rect.width) : 1;
+      const scaleY = rect.height ? (targetElement.height / rect.height) : 1;
+
+      if (e.touches && e.touches.length >= 3) {
+        const sid = getScreenId(false);
+        if (!sid) return;
+        const { avgX, avgY, spreadDia } = getMobileTouchMetrics(e.touches);
+        if (!isMobileMultiErasing) {
+          pendingMobileTap = false;
+          isMobileTouchMulti = true;
+          isMobileMultiErasing = true;
+          drawing = true;
+          mobileMultiEraserDia = spreadDia;
+          lastX = (avgX - rect.left) * scaleX;
+          lastY = (avgY - rect.top) * scaleY;
+          syncMobileEraserButtons(true);
+        }
+        const currentX = (avgX - rect.left) * scaleX;
+        const currentY = (avgY - rect.top) * scaleY;
+        const ringDia = mobileMultiEraserDia * (rect.width ? (rect.width / targetElement.width) : 1);
+        showMobileEraserRing(avgX, avgY, ringDia);
+        pushMobileStroke(targetElement, lastX, lastY, currentX, currentY, mobileMultiEraserDia, true);
+        lastX = currentX; lastY = currentY;
+        return;
+      }
+
+      if (isMobileMultiErasing) {
+        hideMobileEraserRing();
+        return;
+      }
+
+      if (!e.touches && isEraserMode) {
+        const ringDia = MOBILE_TOOLBAR_ERASER_DIA * (rect.width ? (rect.width / targetElement.width) : 1);
+        showMobileEraserRing(e.clientX, e.clientY, ringDia);
+      } else if (!e.touches) {
+        hideMobileEraserRing();
+      }
+
+      if (!drawing || isMobileTouchMulti) return;
+      pendingMobileTap = false;
+      const screenId = getScreenId(false); if (!screenId) return;
       const touch = e.touches ? e.touches[0] : e;
-      const currentX = touch.clientX - rect.left;
-      const currentY = touch.clientY - rect.top;
+      const currentX = (touch.clientX - rect.left) * scaleX;
+      const currentY = (touch.clientY - rect.top) * scaleY;
 
-      push(ref(db, `screens/${screenId}/drawEvents`), {
-        x0: lastX / targetElement.width, y0: lastY / targetElement.height,
-        x1: currentX / targetElement.width, y1: currentY / targetElement.height,
-        color: currentColor,
-        size: isEraserMode ? 22 : 4.5,
-        isEraser: isEraserMode
-      });
+      if (isEraserMode) {
+        const ringDia = MOBILE_TOOLBAR_ERASER_DIA * (rect.width ? (rect.width / targetElement.width) : 1);
+        showMobileEraserRing(touch.clientX, touch.clientY, ringDia);
+      }
 
+      pushMobileStroke(targetElement, lastX, lastY, currentX, currentY, isEraserMode ? MOBILE_TOOLBAR_ERASER_DIA : 4.5, isEraserMode);
       lastX = currentX; lastY = currentY;
     }
 
-    function handleEnd() { drawing = false; }
+    function handleEnd(e, targetElement) {
+      if (e && e.type && e.type.startsWith('touch')) e.preventDefault();
+      if (e && e.touches && e.touches.length > 0) {
+        if (isMobileMultiErasing && e.touches.length < 3) hideMobileEraserRing();
+        pendingMobileTap = false;
+        drawing = false;
+        return;
+      }
 
-    pad.addEventListener('touchstart', e => handleStart(e, pad));
-    pad.addEventListener('touchmove', e => handleMove(e, pCtx, pad));
-    pad.addEventListener('touchend', handleEnd);
+      if (pendingMobileTap && !isMobileTouchMulti && !isMobileMultiErasing && targetElement) {
+        pushMobileStroke(targetElement, lastX, lastY, lastX + 0.1, lastY + 0.1, isEraserMode ? MOBILE_TOOLBAR_ERASER_DIA : 4.5, isEraserMode);
+      }
+
+      pendingMobileTap = false;
+      isMobileTouchMulti = false;
+      drawing = false;
+
+      if (isMobileMultiErasing) {
+        isMobileMultiErasing = false;
+        syncMobileEraserButtons(isEraserMode);
+      }
+
+      if (e && (e.type === 'mouseleave' || (e.type && e.type.startsWith('touch')))) {
+        hideMobileEraserRing();
+      } else if (!isEraserMode) {
+        hideMobileEraserRing();
+      } else if (e && typeof e.clientX === 'number' && targetElement) {
+        const rect = targetElement.getBoundingClientRect();
+        const ringDia = MOBILE_TOOLBAR_ERASER_DIA * (rect.width ? (rect.width / targetElement.width) : 1);
+        showMobileEraserRing(e.clientX, e.clientY, ringDia);
+      }
+    }
+
+    pad.addEventListener('touchstart', e => handleStart(e, pad), { passive: false });
+    pad.addEventListener('touchmove', e => handleMove(e, pCtx, pad), { passive: false });
+    pad.addEventListener('touchend', e => handleEnd(e, pad), { passive: false });
+    pad.addEventListener('touchcancel', e => handleEnd(e, pad), { passive: false });
     pad.addEventListener('mousedown', e => handleStart(e, pad));
     pad.addEventListener('mousemove', e => handleMove(e, pCtx, pad));
-    pad.addEventListener('mouseup', handleEnd);
+    pad.addEventListener('mouseup', e => handleEnd(e, pad));
+    pad.addEventListener('mouseleave', e => handleEnd(e, pad));
 
-    liveCanvas.addEventListener('touchstart', e => handleStart(e, liveCanvas));
-    liveCanvas.addEventListener('touchmove', e => handleMove(e, lCtx, liveCanvas));
-    liveCanvas.addEventListener('touchend', handleEnd);
+    liveCanvas.addEventListener('touchstart', e => handleStart(e, liveCanvas), { passive: false });
+    liveCanvas.addEventListener('touchmove', e => handleMove(e, lCtx, liveCanvas), { passive: false });
+    liveCanvas.addEventListener('touchend', e => handleEnd(e, liveCanvas), { passive: false });
+    liveCanvas.addEventListener('touchcancel', e => handleEnd(e, liveCanvas), { passive: false });
     liveCanvas.addEventListener('mousedown', e => handleStart(e, liveCanvas));
     liveCanvas.addEventListener('mousemove', e => handleMove(e, lCtx, liveCanvas));
-    liveCanvas.addEventListener('mouseup', handleEnd);
+    liveCanvas.addEventListener('mouseup', e => handleEnd(e, liveCanvas));
+    liveCanvas.addEventListener('mouseleave', e => handleEnd(e, liveCanvas));
 
     function drawOnMobileCanvas(targetCtx, targetCanvas, d) {
       if (!targetCtx || !targetCanvas) return;
@@ -1321,6 +1521,7 @@ window.openDrawFullscreen = function() {
 // 2. 退出全螢幕標註模式
 window.closeDrawFullscreen = function() {
   isDrawFullscreen = false;
+  hideMobileEraserRing();
   document.getElementById('draw-fullscreen-overlay').style.display = 'none';
   resizeDrawPad(); // 重新整理普通模式畫布
 };
@@ -1353,12 +1554,14 @@ window.setPadBackground = function(url) {
 };
 
 // 綁定全螢幕畫布觸控與繪圖事件
-fsPad.addEventListener('touchstart', e => handleStart(e, fsPad));
-fsPad.addEventListener('touchmove', e => handleMove(e, fsCtx, fsPad));
-fsPad.addEventListener('touchend', handleEnd);
+fsPad.addEventListener('touchstart', e => handleStart(e, fsPad), { passive: false });
+fsPad.addEventListener('touchmove', e => handleMove(e, fsCtx, fsPad), { passive: false });
+fsPad.addEventListener('touchend', e => handleEnd(e, fsPad), { passive: false });
+fsPad.addEventListener('touchcancel', e => handleEnd(e, fsPad), { passive: false });
 fsPad.addEventListener('mousedown', e => handleStart(e, fsPad));
 fsPad.addEventListener('mousemove', e => handleMove(e, fsCtx, fsPad));
-fsPad.addEventListener('mouseup', handleEnd);
+fsPad.addEventListener('mouseup', e => handleEnd(e, fsPad));
+fsPad.addEventListener('mouseleave', e => handleEnd(e, fsPad));
   
     // ==========================================
     // 📁 手機端雙向 P2P 檔案傳輸模組 (WebRTC DataChannel)

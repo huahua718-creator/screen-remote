@@ -139,6 +139,25 @@
 
     #photo-view { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; user-select: none; -webkit-user-select: none; }
     #annotation-canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; pointer-events: auto; cursor: crosshair; touch-action: none; user-select: none; -webkit-user-select: none; }
+    #eraser-range-indicator {
+      display: none;
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 950;
+      transform: translate(-50%, -50%);
+      box-sizing: border-box;
+    }
+    #eraser-range-indicator svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      overflow: visible;
+    }
 
     #remote-video { width: 100%; height: 100%; object-fit: contain; }
     .live-badge { position: absolute; top: 20px; left: 20px; background: rgba(239, 68, 68, 0.9); backdrop-filter: blur(10px); color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.88rem; z-index: 20; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
@@ -289,6 +308,15 @@
   <div id="video-container">
     <div class="live-badge" id="stream-type-tag">🔴 實況傳輸中</div>
     <video id="remote-video" autoplay playsinline controls></video>
+  </div>
+
+  <!-- 🌟 橡皮擦範圍圓形虛線指示器 -->
+  <div id="eraser-range-indicator" aria-hidden="true">
+    <svg viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="48" fill="rgba(255, 255, 255, 0.14)" stroke="rgba(15, 23, 42, 0.78)" stroke-width="5" stroke-dasharray="10 7" vector-effect="non-scaling-stroke" />
+      <circle cx="50" cy="50" r="48" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-dasharray="10 7" vector-effect="non-scaling-stroke" />
+      <circle cx="50" cy="50" r="2.5" fill="#ffffff" stroke="rgba(15, 23, 42, 0.85)" stroke-width="1" />
+    </svg>
   </div>
 
   <!-- 🌟 大屏翻頁控制列 -->
@@ -599,14 +627,9 @@
     window.setDrawMode = function() {
       activeMode = 'draw';
       isScreenEraserMode = false;
-      const panBtn = document.getElementById('screen-pan-btn');
-      const drawBtn = document.getElementById('screen-draw-btn');
-      const eraserBtn = document.getElementById('screen-eraser-btn');
-      if (panBtn) panBtn.classList.remove('active');
-      if (drawBtn) drawBtn.classList.add('active');
-      if (eraserBtn) eraserBtn.classList.remove('active');
-      canvas.style.cursor = 'crosshair';
-      updateColorBtnActive();
+      hideEraserIndicator();
+      syncScreenCursor();
+      updateToolbarActiveUI(false);
     };
 
     window.togglePanMode = function() {
@@ -614,14 +637,9 @@
         window.setDrawMode();
       } else {
         activeMode = 'pan';
-        const panBtn = document.getElementById('screen-pan-btn');
-        const drawBtn = document.getElementById('screen-draw-btn');
-        const eraserBtn = document.getElementById('screen-eraser-btn');
-        if (panBtn) panBtn.classList.add('active');
-        if (drawBtn) drawBtn.classList.remove('active');
-        if (eraserBtn) eraserBtn.classList.remove('active');
-        canvas.style.cursor = 'grab';
-        document.querySelectorAll('.screen-color-btn').forEach(b => b.classList.remove('active'));
+        hideEraserIndicator();
+        syncScreenCursor();
+        updateToolbarActiveUI(false);
       }
     };
 
@@ -734,40 +752,84 @@
       }
     });
 
+    const TOOLBAR_ERASER_SCREEN_DIA = 36;
+    const eraserIndicator = document.getElementById('eraser-range-indicator');
+    let isMultiTouchErasing = false;
+    let multiTouchEraserScreenDia = 64;
+    let eraserLastX = 0, eraserLastY = 0;
+    let pendingTouchTap = false;
+
+    function getEraserLayerSize(targetScreenDia) {
+      return Math.max(4, targetScreenDia / scale);
+    }
+
+    function showEraserIndicator(clientX, clientY, diameterPx) {
+      if (!eraserIndicator) return;
+      eraserIndicator.style.left = `${clientX}px`;
+      eraserIndicator.style.top = `${clientY}px`;
+      eraserIndicator.style.width = `${diameterPx}px`;
+      eraserIndicator.style.height = `${diameterPx}px`;
+      eraserIndicator.style.display = 'block';
+    }
+
+    function hideEraserIndicator() {
+      if (eraserIndicator) eraserIndicator.style.display = 'none';
+    }
+
+    function syncScreenCursor() {
+      canvas.style.cursor = activeMode === 'pan' ? 'grab' : (isScreenEraserMode ? 'none' : 'crosshair');
+    }
+
+    function getTouchMetrics(touches) {
+      const len = touches.length;
+      let sumX = 0, sumY = 0;
+      for (let i = 0; i < len; i++) {
+        sumX += touches[i].clientX;
+        sumY += touches[i].clientY;
+      }
+      const avgX = sumX / len;
+      const avgY = sumY / len;
+      let maxDist = 0;
+      for (let i = 0; i < len; i++) {
+        const d = Math.hypot(touches[i].clientX - avgX, touches[i].clientY - avgY);
+        if (d > maxDist) maxDist = d;
+      }
+      const spreadDia = Math.round(Math.min(Math.max(56, maxDist * 1.45), 112));
+      return { avgX, avgY, spreadDia };
+    }
+
+    function updateToolbarActiveUI(gestureErasing = false) {
+      const panBtn = document.getElementById('screen-pan-btn');
+      const drawBtn = document.getElementById('screen-draw-btn');
+      const eraserBtn = document.getElementById('screen-eraser-btn');
+      const showEraserActive = gestureErasing || (activeMode === 'draw' && isScreenEraserMode);
+
+      if (panBtn) panBtn.classList.toggle('active', !gestureErasing && activeMode === 'pan');
+      if (drawBtn) drawBtn.classList.toggle('active', !gestureErasing && activeMode === 'draw' && !isScreenEraserMode);
+      if (eraserBtn) eraserBtn.classList.toggle('active', showEraserActive);
+      updateColorBtnActive(gestureErasing);
+    }
+
     window.setScreenPen = function(color) {
       activeMode = 'draw';
       isScreenEraserMode = false;
       screenColor = color;
-      const panBtn = document.getElementById('screen-pan-btn');
-      const drawBtn = document.getElementById('screen-draw-btn');
-      const eraserBtn = document.getElementById('screen-eraser-btn');
-      if (panBtn) panBtn.classList.remove('active');
-      if (drawBtn) drawBtn.classList.add('active');
-      if (eraserBtn) eraserBtn.classList.remove('active');
-      canvas.style.cursor = 'crosshair';
-      updateColorBtnActive();
+      hideEraserIndicator();
+      syncScreenCursor();
+      updateToolbarActiveUI(false);
     };
 
     window.toggleScreenEraser = function() {
       activeMode = 'draw';
       isScreenEraserMode = !isScreenEraserMode;
-      const panBtn = document.getElementById('screen-pan-btn');
-      const drawBtn = document.getElementById('screen-draw-btn');
-      const eraserBtn = document.getElementById('screen-eraser-btn');
-      if (panBtn) panBtn.classList.remove('active');
-      if (drawBtn) drawBtn.classList.toggle('active', !isScreenEraserMode);
-      if (eraserBtn) eraserBtn.classList.toggle('active', isScreenEraserMode);
-      canvas.style.cursor = isScreenEraserMode ? 'cell' : 'crosshair';
-      if (isScreenEraserMode) {
-        document.querySelectorAll('.screen-color-btn').forEach(b => b.classList.remove('active'));
-      } else {
-        updateColorBtnActive();
-      }
+      if (!isScreenEraserMode) hideEraserIndicator();
+      syncScreenCursor();
+      updateToolbarActiveUI(false);
     };
 
-    function updateColorBtnActive() {
+    function updateColorBtnActive(gestureErasing = false) {
       document.querySelectorAll('.screen-color-btn').forEach(b => {
-        b.classList.toggle('active', !isScreenEraserMode && activeMode === 'draw' && (b.getAttribute('onclick') || '').includes(screenColor));
+        b.classList.toggle('active', !gestureErasing && !isScreenEraserMode && activeMode === 'draw' && (b.getAttribute('onclick') || '').includes(screenColor));
       });
     }
 
@@ -786,11 +848,25 @@
       return { x, y };
     }
 
+    function pushScreenStroke(x0, y0, x1, y1, size, isEraser) {
+      push(ref(db, `screens/${screenId}/drawEvents`), {
+        x0: x0 / canvas.width, y0: y0 / canvas.height,
+        x1: x1 / canvas.width, y1: y1 / canvas.height,
+        color: screenColor,
+        size: size,
+        isEraser: isEraser
+      });
+    }
+
     // 🌟 縮放與移動觸控/滑鼠手勢處理
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
       zoomAtPoint(scale * zoomFactor, e.clientX, e.clientY);
+      if (isScreenEraserMode && activeMode === 'draw' && !isPanning && !isMultiTouchErasing) {
+        const layerSize = getEraserLayerSize(TOOLBAR_ERASER_SCREEN_DIA);
+        showEraserIndicator(e.clientX, e.clientY, layerSize * scale);
+      }
     }, { passive: false });
 
     canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -799,8 +875,33 @@
       if (document.getElementById('qrcode-view').style.display !== 'none') return;
       if (e.type === 'touchstart') e.preventDefault();
 
+      // 三指以上觸控：即時切換橡皮擦並顯示圓形虛線範圍
+      if (e.touches && e.touches.length >= 3) {
+        pendingTouchTap = false;
+        isTouchMulti = true;
+        isPanning = false;
+        isScreenDrawing = false;
+        initialPinchDist = null;
+        isMultiTouchErasing = true;
+
+        const { avgX, avgY, spreadDia } = getTouchMetrics(e.touches);
+        multiTouchEraserScreenDia = spreadDia;
+        const layerSize = getEraserLayerSize(multiTouchEraserScreenDia);
+        const coords = getLayerCoords(avgX, avgY);
+        eraserLastX = coords.x;
+        eraserLastY = coords.y;
+
+        showEraserIndicator(avgX, avgY, layerSize * scale);
+        updateToolbarActiveUI(true);
+        pushScreenStroke(eraserLastX, eraserLastY, eraserLastX + 0.1, eraserLastY + 0.1, layerSize, true);
+        return;
+      }
+
       // 觸控雙指縮放與拖曳
-      if (e.touches && e.touches.length >= 2) {
+      if (e.touches && e.touches.length === 2) {
+        if (isMultiTouchErasing) return;
+        pendingTouchTap = false;
+        hideEraserIndicator();
         isTouchMulti = true;
         isPanning = true;
         isScreenDrawing = false;
@@ -818,11 +919,12 @@
         return;
       }
 
-      // 剛結束雙指手勢但尚有一指未離屏時，避免誤觸單指畫筆
-      if (isTouchMulti) return;
+      // 剛結束多指手勢但尚有手指未離屏時，避免誤觸單指畫筆
+      if (isTouchMulti || isMultiTouchErasing) return;
 
       // 切換為移動模式 / 按住滑鼠右鍵/中鍵
       if (activeMode === 'pan' || e.button === 1 || e.button === 2) {
+        hideEraserIndicator();
         isPanning = true;
         isScreenDrawing = false;
         const touch = e.touches ? e.touches[0] : e;
@@ -837,23 +939,62 @@
         screenLastX = coords.x;
         screenLastY = coords.y;
 
-        // 支援單點點擊即時標記（俐落實心圓點）
-        const adaptiveSize = isScreenEraserMode ? Math.max(10, 22 / Math.pow(scale, 0.7)) : Math.max(1.8, 4.5 / Math.pow(scale, 0.65));
-        push(ref(db, `screens/${screenId}/drawEvents`), {
-          x0: screenLastX / canvas.width, y0: screenLastY / canvas.height,
-          x1: (screenLastX + 0.1) / canvas.width, y1: (screenLastY + 0.1) / canvas.height,
-          color: screenColor,
-          size: adaptiveSize,
-          isEraser: isScreenEraserMode
-        });
+        const eraserLayerSize = getEraserLayerSize(TOOLBAR_ERASER_SCREEN_DIA);
+        const adaptiveSize = isScreenEraserMode ? eraserLayerSize : Math.max(1.8, 4.5 / Math.pow(scale, 0.65));
+
+        if (isScreenEraserMode) {
+          showEraserIndicator(touch.clientX, touch.clientY, eraserLayerSize * scale);
+        } else {
+          hideEraserIndicator();
+        }
+
+        if (e.touches) {
+          // 觸控單點暫緩至移動或放開時寫入，避免雙指/三指手勢前落下雜點
+          pendingTouchTap = true;
+        } else {
+          pendingTouchTap = false;
+          pushScreenStroke(screenLastX, screenLastY, screenLastX + 0.1, screenLastY + 0.1, adaptiveSize, isScreenEraserMode);
+        }
       }
     }
 
     function handleScreenMove(e) {
       if (e.type === 'touchmove') e.preventDefault();
 
+      // 三指以上即時橡皮擦拖曳
+      if (e.touches && e.touches.length >= 3) {
+        const { avgX, avgY, spreadDia } = getTouchMetrics(e.touches);
+        if (!isMultiTouchErasing) {
+          pendingTouchTap = false;
+          isTouchMulti = true;
+          isPanning = false;
+          isScreenDrawing = false;
+          initialPinchDist = null;
+          isMultiTouchErasing = true;
+          multiTouchEraserScreenDia = spreadDia;
+          const initCoords = getLayerCoords(avgX, avgY);
+          eraserLastX = initCoords.x;
+          eraserLastY = initCoords.y;
+          updateToolbarActiveUI(true);
+        }
+        const layerSize = getEraserLayerSize(multiTouchEraserScreenDia);
+        const coords = getLayerCoords(avgX, avgY);
+        showEraserIndicator(avgX, avgY, layerSize * scale);
+        pushScreenStroke(eraserLastX, eraserLastY, coords.x, coords.y, layerSize, true);
+        eraserLastX = coords.x;
+        eraserLastY = coords.y;
+        return;
+      }
+
+      // 三指擦除過程中部分手指先離屏，不切換回縮放或繪圖
+      if (isMultiTouchErasing) {
+        hideEraserIndicator();
+        return;
+      }
+
       if (isPanning) {
-        if (e.touches && e.touches.length >= 2) {
+        hideEraserIndicator();
+        if (e.touches && e.touches.length === 2) {
           const currentDist = Math.hypot(
             e.touches[0].clientX - e.touches[1].clientX,
             e.touches[0].clientY - e.touches[1].clientY
@@ -890,18 +1031,26 @@
         return;
       }
 
+      // 滑鼠懸停在橡皮擦模式下，即時顯示圓形虛線範圍
+      if (!e.touches && isScreenEraserMode && activeMode === 'draw' && !isTouchMulti) {
+        const layerSize = getEraserLayerSize(TOOLBAR_ERASER_SCREEN_DIA);
+        showEraserIndicator(e.clientX, e.clientY, layerSize * scale);
+      } else if (!e.touches) {
+        hideEraserIndicator();
+      }
+
       if (!isScreenDrawing || isTouchMulti) return;
+      pendingTouchTap = false;
       const touch = e.touches ? e.touches[0] : e;
       const coords = getLayerCoords(touch.clientX, touch.clientY);
-      const adaptiveSize = isScreenEraserMode ? Math.max(10, 22 / Math.pow(scale, 0.7)) : Math.max(1.8, 4.5 / Math.pow(scale, 0.65));
+      const eraserLayerSize = getEraserLayerSize(TOOLBAR_ERASER_SCREEN_DIA);
+      const adaptiveSize = isScreenEraserMode ? eraserLayerSize : Math.max(1.8, 4.5 / Math.pow(scale, 0.65));
 
-      push(ref(db, `screens/${screenId}/drawEvents`), {
-        x0: screenLastX / canvas.width, y0: screenLastY / canvas.height,
-        x1: coords.x / canvas.width, y1: coords.y / canvas.height,
-        color: screenColor,
-        size: adaptiveSize,
-        isEraser: isScreenEraserMode
-      });
+      if (isScreenEraserMode) {
+        showEraserIndicator(touch.clientX, touch.clientY, eraserLayerSize * scale);
+      }
+
+      pushScreenStroke(screenLastX, screenLastY, coords.x, coords.y, adaptiveSize, isScreenEraserMode);
 
       screenLastX = coords.x;
       screenLastY = coords.y;
@@ -910,16 +1059,42 @@
     function handleScreenEnd(e) {
       if (e && e.type && e.type.startsWith('touch')) e.preventDefault();
       if (e && e.touches && e.touches.length > 0) {
-        // 雙指放開一指時，暫時結束 panning，等所有手指離開後才重置 isTouchMulti
+        if (isMultiTouchErasing && e.touches.length < 3) {
+          hideEraserIndicator();
+        }
+        pendingTouchTap = false;
         isScreenDrawing = false;
         isPanning = false;
         return;
       }
+
+      if (pendingTouchTap && !isTouchMulti && !isMultiTouchErasing && activeMode === 'draw') {
+        const eraserLayerSize = getEraserLayerSize(TOOLBAR_ERASER_SCREEN_DIA);
+        const adaptiveSize = isScreenEraserMode ? eraserLayerSize : Math.max(1.8, 4.5 / Math.pow(scale, 0.65));
+        pushScreenStroke(screenLastX, screenLastY, screenLastX + 0.1, screenLastY + 0.1, adaptiveSize, isScreenEraserMode);
+      }
+
+      pendingTouchTap = false;
       isTouchMulti = false;
       isScreenDrawing = false;
       isPanning = false;
       initialPinchDist = null;
-      canvas.style.cursor = activeMode === 'pan' ? 'grab' : (isScreenEraserMode ? 'cell' : 'crosshair');
+
+      if (isMultiTouchErasing) {
+        isMultiTouchErasing = false;
+        updateToolbarActiveUI(false);
+      }
+
+      if (e && (e.type === 'mouseleave' || (e.type && e.type.startsWith('touch')))) {
+        hideEraserIndicator();
+      } else if (!isScreenEraserMode || activeMode !== 'draw') {
+        hideEraserIndicator();
+      } else if (e && typeof e.clientX === 'number') {
+        const layerSize = getEraserLayerSize(TOOLBAR_ERASER_SCREEN_DIA);
+        showEraserIndicator(e.clientX, e.clientY, layerSize * scale);
+      }
+
+      syncScreenCursor();
     }
 
     canvas.addEventListener('mousedown', handleScreenStart);
@@ -1040,7 +1215,12 @@
       lastRenderedContentKey = '';
       lastRenderedPhotoIdentity = '';
       localDrawHistory = [];
+      isMultiTouchErasing = false;
+      isTouchMulti = false;
+      pendingTouchTap = false;
+      hideEraserIndicator();
       resetZoom();
+      window.setDrawMode();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       currentIframeUrl = '';
       const shareBtn = document.getElementById('tb-share-url-btn');
