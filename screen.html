@@ -556,7 +556,7 @@
         standbyBar.classList.toggle('is-locked', isLockedWithOwner);
         standbyBar.classList.toggle('is-unlocked', isOpenWithOwner);
         if (isLockedWithOwner) {
-          standbyText.innerText = '🔒 已鎖定（主控端已連線，其他裝置無法切換大屏）';
+          standbyText.innerText = '🔒 已鎖定（僅主控端可操控；其他手機仍可唯讀接收大屏網址）';
           standbyBtn.style.display = 'inline-block';
         } else if (isOpenWithOwner) {
           standbyText.innerText = '🔓 開放連線模式（允許其他裝置推送與切換）';
@@ -1880,7 +1880,7 @@ function setToolbarToMinimized() {
         title: '大屏當前網頁',
         timestamp: Date.now()
       });
-      showScreenFtToast(`✅ 已成功將網頁推送至手機端！`);
+      showScreenFtToast(`✅ 已將網頁廣播推送至所有連線手機！`);
       toggleScreenUrlModal(false);
     };
 
@@ -1900,7 +1900,7 @@ function setToolbarToMinimized() {
         timestamp: Date.now()
       });
 
-      showScreenFtToast(`✅ 已將網頁推送至手機端！`);
+      showScreenFtToast(`✅ 已將網頁廣播推送至所有連線手機！`);
       document.getElementById('screen-push-url-input').value = '';
       document.getElementById('screen-push-name-input').value = '';
       toggleScreenUrlModal(false);

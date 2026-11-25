@@ -365,8 +365,8 @@
 
       <!-- 非主控端被鎖定時的提示卡片 -->
       <div id="mobile-locked-notice" class="lock-notice-box blocked">
-        <strong>🔒 大屏目前已開啟「鎖定模式」</strong><br>
-        已由主控端手機連線鎖定，其他裝置目前無法連線或切換畫面。請於主控端手機切換為開放模式後再試。
+        <strong>🔒 大屏目前已開啟「鎖定模式」（唯讀接收中）</strong><br>
+        已由主控端手機鎖定控制權，無法切換或推送內容至大屏；若大屏向全班廣播推送網址，您仍會即時收到並可直接開啟。
       </div>
 
       <!-- 開放模式下，訪客裝置的狀態提示 -->
@@ -378,6 +378,22 @@
       <div id="mobile-reclaim-bar" class="lock-notice-box reclaim">
         <span>🔓 大屏目前已解除鎖定並待機中</span>
         <button type="button" class="lock-toggle-btn" style="background:#007aff;" onclick="claimRoomControl()">🔒 取得主控並鎖定</button>
+      </div>
+    </div>
+
+    <!-- 🌟 接收自大屏的網頁推送卡片（鎖定模式下仍保持可點擊開啟） -->
+    <div id="incoming-url-box" class="card" style="padding: 13px 15px; background: rgba(240, 253, 244, 0.95); border: 1px solid #86efac; display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <span style="font-weight: bold; color: #15803d; font-size: 0.92rem; display: flex; align-items: center; gap: 4px;">
+          🌐 來自大屏的網頁推送
+        </span>
+        <span id="incoming-url-time" style="font-size: 0.75rem; color: #6b7280;"></span>
+      </div>
+      <div id="incoming-url-title" style="font-size: 0.9rem; font-weight: bold; color: #1f2937; margin-bottom: 4px; word-break: break-all;"></div>
+      <div id="incoming-url-link" style="font-size: 0.8rem; color: #2563eb; margin-bottom: 10px; word-break: break-all;"></div>
+      <div style="display: flex; gap: 8px;">
+        <button type="button" class="action-btn push-btn" style="flex: 1; padding: 8px; font-size: 0.85rem; margin-top: 0;" onclick="openLatestIncomingUrl()">🔗 開啟網頁</button>
+        <button type="button" class="action-btn" style="flex: 1; padding: 8px; font-size: 0.85rem; margin-top: 0; background: #64748b; box-shadow: none;" onclick="copyLatestIncomingUrl()">📋 複製連結</button>
       </div>
     </div>
 
@@ -403,22 +419,6 @@
 
       <button class="action-btn" onclick="sendUrl()">推送至大屏</button>
       <button style="width:100%; background:none; border:none; color:#8e8e93; font-size:0.75rem; margin-top:8px; cursor:pointer;" onclick="clearHistory()">清空歷史紀錄</button>
-      <!-- 🌟 接收自大屏的網頁推送卡片 -->
-      <div id="incoming-url-box" style="margin-top: 16px; padding: 12px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px; display: none;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <span style="font-weight: bold; color: #15803d; font-size: 0.9rem; display: flex; align-items: center; gap: 4px;">
-            🌐 來自大屏的網頁推送
-          </span>
-          <span id="incoming-url-time" style="font-size: 0.75rem; color: #6b7280;"></span>
-        </div>
-        <div id="incoming-url-title" style="font-size: 0.88rem; font-weight: bold; color: #1f2937; margin-bottom: 4px; word-break: break-all;"></div>
-        <div id="incoming-url-link" style="font-size: 0.8rem; color: #2563eb; margin-bottom: 10px; word-break: break-all;"></div>
-        <div style="display: flex; gap: 8px;">
-          <button type="button" class="action-btn push-btn" style="flex: 1; padding: 8px; font-size: 0.85rem;" onclick="openLatestIncomingUrl()">🔗 開啟網頁</button>
-          <button type="button" class="action-btn" style="flex: 1; padding: 8px; font-size: 0.85rem; background: #6b7280;" onclick="copyLatestIncomingUrl()">📋 複製連結</button>
-        </div>
-      </div>
-
     </div>
 
     <!-- 2. 媒體與鏡頭頁籤 -->
@@ -657,10 +657,13 @@
     let currentRoomLockState = null;
     let autoClaimAttemptedRoom = '';
     let activeListenersRoomId = '';
+    let activeIncomingUrlRoomId = '';
     let mobileDrawChildRef = null;
     let mobileDrawValRef = null;
     let ftReqRef = null;
     let pushedUrlRef = null;
+    let latestIncomingUrl = null;
+    let lastHandledPushedUrlTime = 0;
 
     function isRoomBlockedByLock() {
       return !!(
@@ -676,18 +679,28 @@
       if (!screenId) return false;
       if (isRoomBlockedByLock()) {
         if (showAlert) {
-          alert('🔒 此大屏目前處於「鎖定模式」，僅限主控端手機操作或解除鎖定後才可切換！');
+          alert('🔒 此大屏目前處於「鎖定模式」，僅限主控端手機操作或解除鎖定後才可切換！\n（您仍可直接接收大屏推送過來的網址）');
         }
         return false;
       }
       return true;
     }
 
+    function detachIncomingUrlListener() {
+      activeIncomingUrlRoomId = '';
+      if (pushedUrlRef) { off(pushedUrlRef); pushedUrlRef = null; }
+    }
+
+    function attachIncomingUrlListener(roomId) {
+      if (!roomId || activeIncomingUrlRoomId === roomId) return;
+      activeIncomingUrlRoomId = roomId;
+      listenToIncomingUrlsFromScreen();
+    }
+
     function detachRoomActionListeners() {
       activeListenersRoomId = '';
       if (requestPageRef) { off(requestPageRef); requestPageRef = null; }
       if (ftReqRef) { off(ftReqRef); ftReqRef = null; }
-      if (pushedUrlRef) { off(pushedUrlRef); pushedUrlRef = null; }
       if (mobileDrawChildRef) { off(mobileDrawChildRef); mobileDrawChildRef = null; }
       if (mobileDrawValRef) { off(mobileDrawValRef); mobileDrawValRef = null; }
     }
@@ -754,7 +767,7 @@
         pill.className = 'room-pill';
         if (isBlocked) {
           pill.classList.add('blocked');
-          pill.innerText = `🔒 #${roomId} 已鎖定`;
+          pill.innerText = `🔒 #${roomId} 唯讀收網址`;
         } else if (isOwner && isLocked) {
           pill.classList.add('locked-owner');
           pill.innerText = `🔒 #${roomId} 主控鎖定`;
@@ -773,7 +786,7 @@
           lockBar.classList.toggle('is-unlocked', !isLocked);
           if (lockTitle) lockTitle.innerText = isLocked ? '🔒 鎖定模式（已開啟）' : '🔓 開放模式（已解鎖）';
           if (lockSub) lockSub.innerText = isLocked
-            ? '預設防搗蛋保護：僅此手機可操作，其他裝置無法切換'
+            ? '防搗蛋保護中：僅此手機可操作，其他裝置僅能接收網址'
             : '目前已開放：允許其他裝置輸入房間碼連線與推送';
           if (lockToggleBtn) lockToggleBtn.innerText = isLocked ? '🔓 切換開放' : '🔒 切換鎖定';
         } else {
@@ -795,7 +808,6 @@
       activeListenersRoomId = roomId;
       listenToPageRequests();
       listenToScreenFtRequests();
-      listenToIncomingUrlsFromScreen();
       if (typeof listenToScreenDrawEvents === 'function') listenToScreenDrawEvents();
       const fileTab = document.getElementById('file-tab');
       if (fileTab && fileTab.classList.contains('active') && typeof ensureMobileFtConnection === 'function') {
@@ -848,6 +860,7 @@
         if (!val || !val.exists) {
           currentRoomLockState = null;
           detachRoomActionListeners();
+          detachIncomingUrlListener();
           updateMobileLockUI(targetId);
           return;
         }
@@ -860,6 +873,9 @@
 
         currentRoomLockState = val;
         updateMobileLockUI(targetId);
+
+        // 即使大屏處於鎖定模式，仍保持唯讀接收大屏廣播推送的網址
+        attachIncomingUrlListener(targetId);
 
         if (isRoomBlockedByLock()) {
           detachRoomActionListeners();
@@ -876,8 +892,10 @@
         currentListeningRoom = '';
         autoClaimAttemptedRoom = '';
         currentRoomLockState = null;
+        lastHandledPushedUrlTime = 0;
         if (mobileLockRef) { off(mobileLockRef); mobileLockRef = null; }
         detachRoomActionListeners();
+        detachIncomingUrlListener();
         updateMobileLockUI('');
         return;
       }
@@ -885,7 +903,9 @@
       currentListeningRoom = id;
       autoClaimAttemptedRoom = '';
       currentRoomLockState = null;
+      lastHandledPushedUrlTime = 0;
       detachRoomActionListeners();
+      detachIncomingUrlListener();
       updateMobileLockUI(id);
       listenToRoomLock(id);
     };
@@ -2347,8 +2367,6 @@ fsPad.addEventListener('mouseleave', e => handleEnd(e, fsPad));
     // ==========================================
     // 🌐 監聽來自大屏的網頁推送 (網頁雙向推送)
     // ==========================================
-    let latestIncomingUrl = null;
-    let lastHandledPushedUrlTime = 0;
 
     window.openLatestIncomingUrl = function() {
       if (latestIncomingUrl && latestIncomingUrl.url) {
