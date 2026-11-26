@@ -638,32 +638,83 @@
     const ctx = canvas.getContext('2d');
     const canvasDpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 2.5);
     let localDrawHistory = [];
+    let currentPhotoRatio = null;
+    let pendingRemoteViewTransform = null;
+
+    function getContainRect(boxW, boxH, mediaRatio) {
+      if (!mediaRatio || !boxW || !boxH) return { x: 0, y: 0, w: boxW, h: boxH };
+      const boxRatio = boxW / boxH;
+      let w, h;
+      if (boxRatio > mediaRatio) {
+        h = boxH;
+        w = h * mediaRatio;
+      } else {
+        w = boxW;
+        h = w / mediaRatio;
+      }
+      return {
+        x: (boxW - w) / 2,
+        y: (boxH - h) / 2,
+        w,
+        h
+      };
+    }
 
     function drawStroke(d) {
       if (!d) return;
       ctx.save();
       ctx.beginPath();
-      ctx.moveTo(d.x0 * canvas.width, d.y0 * canvas.height);
-      ctx.lineTo(d.x1 * canvas.width, d.y1 * canvas.height);
+      const usePhotoRect = (d.coordSpace === 'photo' && currentPhotoRatio);
+      const rect = usePhotoRect
+        ? getContainRect(canvas.width, canvas.height, currentPhotoRatio)
+        : { x: 0, y: 0, w: canvas.width, h: canvas.height };
+      ctx.moveTo(rect.x + d.x0 * rect.w, rect.y + d.y0 * rect.h);
+      ctx.lineTo(rect.x + d.x1 * rect.w, rect.y + d.y1 * rect.h);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       if (d.isEraser) {
         ctx.globalCompositeOperation = 'destination-out';
-        ctx.lineWidth = (d.size || 22) * canvasDpr;
+        if (d.relSize && usePhotoRect) {
+          ctx.lineWidth = Math.max(4 * canvasDpr, d.relSize * rect.w);
+        } else {
+          ctx.lineWidth = (d.size || 22) * canvasDpr;
+        }
       } else {
         ctx.globalCompositeOperation = 'source-over';
         ctx.strokeStyle = d.color;
-        const baseWidth = Math.max(d.size || 4.5, 1.8);
-        ctx.lineWidth = baseWidth * canvasDpr;
+        if (d.relSize && usePhotoRect) {
+          ctx.lineWidth = Math.max(1.8 * canvasDpr, d.relSize * rect.w);
+        } else {
+          const baseWidth = Math.max(d.size || 4.5, 1.8);
+          ctx.lineWidth = baseWidth * canvasDpr;
+        }
       }
       ctx.stroke();
       ctx.restore();
     }
 
+    function redrawScreenCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      localDrawHistory.forEach(drawStroke);
+    }
+
+    const photoViewEl = document.getElementById('photo-view');
+    if (photoViewEl) {
+      photoViewEl.addEventListener('load', () => {
+        if (photoViewEl.naturalWidth && photoViewEl.naturalHeight) {
+          currentPhotoRatio = photoViewEl.naturalWidth / photoViewEl.naturalHeight;
+          if (pendingRemoteViewTransform) {
+            applyRemoteViewTransform(pendingRemoteViewTransform);
+          }
+          redrawScreenCanvas();
+        }
+      });
+    }
+
     function resizeCanvas() {
       canvas.width = Math.round(window.innerWidth * canvasDpr);
       canvas.height = Math.round(window.innerHeight * canvasDpr);
-      localDrawHistory.forEach(drawStroke);
+      redrawScreenCanvas();
     }
     window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
@@ -688,6 +739,8 @@
     let lastRenderedMode = '';
     let lastRenderedContentKey = '';
     let lastRenderedPhotoIdentity = '';
+    let lastScreenViewSyncAt = 0;
+    let screenViewSyncTimer = null;
 
     const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
@@ -698,6 +751,80 @@
       return url;
     }
 
+    function getViewportSize() {
+      const viewport = document.getElementById('media-viewport');
+      const rect = viewport ? viewport.getBoundingClientRect() : null;
+      const vw = (rect && rect.width) ? rect.width : window.innerWidth;
+      const vh = (rect && rect.height) ? rect.height : window.innerHeight;
+      return { vw, vh };
+    }
+
+    function getNormalizedViewCenter() {
+      if (scale <= 1) return { cx: 0.5, cy: 0.5 };
+      const { vw, vh } = getViewportSize();
+      const baseRect = getContainRect(vw, vh, currentPhotoRatio);
+      const iw = baseRect.w || vw;
+      const ih = baseRect.h || vh;
+      return {
+        cx: 0.5 - translateX / (iw * scale),
+        cy: 0.5 - translateY / (ih * scale)
+      };
+    }
+
+    function applyRemoteViewTransform(vt) {
+      if (!vt) return;
+      const newScale = Math.min(Math.max(1, Number(vt.scale) || 1), 8);
+      if (newScale <= 1.001) {
+        scale = 1;
+        translateX = 0;
+        translateY = 0;
+      } else {
+        const { vw, vh } = getViewportSize();
+        const baseRect = getContainRect(vw, vh, currentPhotoRatio);
+        const iw = baseRect.w || vw;
+        const ih = baseRect.h || vh;
+        const cx = typeof vt.cx === 'number' ? vt.cx : 0.5;
+        const cy = typeof vt.cy === 'number' ? vt.cy : 0.5;
+        scale = newScale;
+        translateX = -(cx - 0.5) * iw * scale;
+        translateY = -(cy - 0.5) * ih * scale;
+      }
+      updateTransform();
+    }
+
+    function syncScreenViewTransform(force = false) {
+      if (lastRenderedMode !== 'photo') return;
+      const now = Date.now();
+      const pushNow = () => {
+        lastScreenViewSyncAt = Date.now();
+        const { cx, cy } = getNormalizedViewCenter();
+        update(screenRef, {
+          viewTransform: {
+            scale: Number(scale.toFixed(4)),
+            cx: Number(cx.toFixed(5)),
+            cy: Number(cy.toFixed(5)),
+            senderId: 'screen_host',
+            updatedAt: lastScreenViewSyncAt
+          }
+        });
+      };
+      clearTimeout(screenViewSyncTimer);
+      if (force || now - lastScreenViewSyncAt >= 60) {
+        pushNow();
+      } else {
+        screenViewSyncTimer = setTimeout(pushNow, 60 - (now - lastScreenViewSyncAt));
+      }
+    }
+
+    onValue(ref(db, `screens/${screenId}/viewTransform`), (snap) => {
+      const vt = snap.val();
+      if (!vt || vt.senderId === 'screen_host') return;
+      if (!isSenderAuthorized(vt)) return;
+      pendingRemoteViewTransform = vt;
+      if (isPanning) return;
+      applyRemoteViewTransform(vt);
+    });
+
     function updateTransform() {
       const zoomLayer = document.getElementById('zoom-layer');
       if (zoomLayer) {
@@ -705,13 +832,14 @@
       }
     }
 
-    function zoomAtPoint(newScale, clientX, clientY) {
+    function zoomAtPoint(newScale, clientX, clientY, syncRemote = true) {
       newScale = Math.min(Math.max(1, newScale), 8);
       if (newScale === 1) {
         scale = 1;
         translateX = 0;
         translateY = 0;
         updateTransform();
+        if (syncRemote) syncScreenViewTransform(true);
         return;
       }
       const viewport = document.getElementById('media-viewport');
@@ -725,19 +853,22 @@
       translateY = dy - (dy - translateY) * ratio;
       scale = newScale;
       updateTransform();
+      if (syncRemote) syncScreenViewTransform(false);
     }
 
-    window.resetZoom = function() {
+    window.resetZoom = function(syncRemote = true) {
       scale = 1; translateX = 0; translateY = 0;
+      pendingRemoteViewTransform = null;
       updateTransform();
+      if (syncRemote) syncScreenViewTransform(true);
     };
 
     window.zoomIn = function() {
-      zoomAtPoint(scale * 1.25, window.innerWidth / 2, window.innerHeight / 2);
+      zoomAtPoint(scale * 1.25, window.innerWidth / 2, window.innerHeight / 2, true);
     };
 
     window.zoomOut = function() {
-      zoomAtPoint(scale / 1.25, window.innerWidth / 2, window.innerHeight / 2);
+      zoomAtPoint(scale / 1.25, window.innerWidth / 2, window.innerHeight / 2, true);
     };
 
     window.setDrawMode = function() {
@@ -775,6 +906,8 @@
         if (lastRenderedMode !== 'url' || lastRenderedContentKey !== urlKey) {
           lastRenderedMode = 'url';
           lastRenderedContentKey = urlKey;
+          currentPhotoRatio = null;
+          pendingRemoteViewTransform = null;
           currentOfferSdp = null;
           currentIframeUrl = data.url;
           closeWebRTC(); showView('iframe');
@@ -797,13 +930,14 @@
           lastRenderedContentKey = photoKey;
           lastRenderedPhotoIdentity = photoIdentity;
           currentOfferSdp = null;
+          if (data.photoRatio) currentPhotoRatio = Number(data.photoRatio) || null;
           closeWebRTC(); showView('photo');
           const newWinBtn = document.getElementById('screen-open-new-win-btn');
           if (newWinBtn) newWinBtn.style.display = 'none';
           const shareBtn = document.getElementById('tb-share-url-btn');
           if (shareBtn) shareBtn.style.display = 'none';
           document.getElementById('photo-view').src = data.photoUrl;
-          if (shouldResetZoom) resetZoom(); // 僅在真正換照片或換頁時重設為 100%
+          if (shouldResetZoom) resetZoom(false); // 僅在真正換照片或換頁時重設為 100%
 
           currentPhotoIndex = data.photoIndex || 1;
           currentPhotoTotal = data.photoTotal || 1;
@@ -821,6 +955,8 @@
       } else if (data.mode === 'webrtc' && data.offer) {
         lastRenderedMode = 'webrtc';
         lastRenderedContentKey = data.offer.sdp || '';
+        currentPhotoRatio = null;
+        pendingRemoteViewTransform = null;
         showView('video');
         const newWinBtn = document.getElementById('screen-open-new-win-btn');
         if (newWinBtn) newWinBtn.style.display = 'none';
@@ -972,9 +1108,21 @@
     }
 
     function pushScreenStroke(x0, y0, x1, y1, size, isEraser) {
+      const usePhotoRect = (lastRenderedMode === 'photo' && currentPhotoRatio);
+      const rect = usePhotoRect
+        ? getContainRect(canvas.width, canvas.height, currentPhotoRatio)
+        : { x: 0, y: 0, w: canvas.width, h: canvas.height };
+      const rectCssW = rect.w / canvasDpr;
+      const relSize = isEraser
+        ? (size / Math.max(1, rectCssW))
+        : Math.max(0.0012, 0.0045 / Math.pow(scale, 0.65));
       push(ref(db, `screens/${screenId}/drawEvents`), {
-        x0: x0 / canvas.width, y0: y0 / canvas.height,
-        x1: x1 / canvas.width, y1: y1 / canvas.height,
+        x0: (x0 - rect.x) / rect.w,
+        y0: (y0 - rect.y) / rect.h,
+        x1: (x1 - rect.x) / rect.w,
+        y1: (y1 - rect.y) / rect.h,
+        coordSpace: usePhotoRect ? 'photo' : 'canvas',
+        relSize: Number(relSize.toFixed(6)),
         color: screenColor,
         size: size,
         isEraser: isEraser,
@@ -1146,11 +1294,13 @@
             }
           }
           updateTransform();
+          syncScreenViewTransform(false);
         } else if (!isTouchMulti) {
           const touch = e.touches ? e.touches[0] : e;
           translateX = touch.clientX - panStartX;
           translateY = touch.clientY - panStartY;
           updateTransform();
+          syncScreenViewTransform(false);
         }
         return;
       }
@@ -1186,6 +1336,7 @@
         if (isMultiTouchErasing && e.touches.length < 3) {
           hideEraserIndicator();
         }
+        if (isPanning) syncScreenViewTransform(true);
         pendingTouchTap = false;
         isScreenDrawing = false;
         isPanning = false;
@@ -1198,11 +1349,13 @@
         pushScreenStroke(screenLastX, screenLastY, screenLastX + 0.1, screenLastY + 0.1, adaptiveSize, isScreenEraserMode);
       }
 
+      const wasPanning = isPanning;
       pendingTouchTap = false;
       isTouchMulti = false;
       isScreenDrawing = false;
       isPanning = false;
       initialPinchDist = null;
+      if (wasPanning) syncScreenViewTransform(true);
 
       if (isMultiTouchErasing) {
         isMultiTouchErasing = false;
@@ -1339,12 +1492,14 @@
       lastRenderedMode = '';
       lastRenderedContentKey = '';
       lastRenderedPhotoIdentity = '';
+      currentPhotoRatio = null;
+      pendingRemoteViewTransform = null;
       localDrawHistory = [];
       isMultiTouchErasing = false;
       isTouchMulti = false;
       pendingTouchTap = false;
       hideEraserIndicator();
-      resetZoom();
+      resetZoom(false);
       window.setDrawMode();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       currentIframeUrl = '';

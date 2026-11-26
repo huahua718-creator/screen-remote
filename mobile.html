@@ -245,11 +245,34 @@
       box-shadow: 0 4px 12px rgba(220, 38, 38, 0.2);
     }
 
-    #draw-pad { 
-      width: 100%; height: 320px; background-color: #0f172a; background-size: contain; 
-      background-repeat: no-repeat; background-position: center; border-radius: 12px; 
-      touch-action: none; cursor: crosshair; border: 1px solid #cbd5e1;
+    #mobile-pad-viewport {
+      width: 100%; height: 340px; background-color: #0f172a;
+      border-radius: 12px; border: 1px solid #cbd5e1;
+      overflow: hidden; position: relative; touch-action: none;
+      user-select: none; -webkit-user-select: none;
       box-shadow: inset 0 2px 6px rgba(0,0,0,0.3);
+    }
+    #mobile-zoom-layer, #fs-zoom-layer {
+      width: 100%; height: 100%; position: relative;
+      display: flex; justify-content: center; align-items: center;
+      transform-origin: center center; will-change: transform;
+      touch-action: none; user-select: none; -webkit-user-select: none;
+    }
+    #mobile-pad-img, #fs-pad-img {
+      display: none; max-width: 100%; max-height: 100%; object-fit: contain;
+      pointer-events: none; user-select: none; -webkit-user-select: none;
+    }
+    #draw-pad {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      touch-action: none; cursor: crosshair;
+    }
+    #fs-pad-viewport {
+      width: 100vw; height: 100vh; overflow: hidden; position: relative;
+      touch-action: none; user-select: none; -webkit-user-select: none;
+    }
+    #fs-draw-pad {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      touch-action: none; cursor: crosshair;
     }
     
     .tool-bar { display: flex; gap: 8px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
@@ -461,7 +484,12 @@
         <button class="nav-pager-btn" onclick="nextPdfPage()">下一頁 ►</button>
       </div>
 
-      <canvas id="draw-pad"></canvas>
+      <div id="mobile-pad-viewport">
+        <div id="mobile-zoom-layer">
+          <img id="mobile-pad-img" src="" alt="" draggable="false">
+          <canvas id="draw-pad"></canvas>
+        </div>
+      </div>
       
       <div class="tool-bar">
         <div class="color-btn" style="background:#ff3b30;" onclick="selectPen('#ff3b30')"></div>
@@ -470,6 +498,10 @@
         <div class="color-btn" style="background:#007aff;" onclick="selectPen('#007aff')"></div>
         <div class="color-btn" style="background:#ffffff;" onclick="selectPen('#ffffff')"></div>
         <button class="tool-btn" id="eraser-btn" onclick="toggleEraser()">🧽 橡皮擦</button>
+        <button class="tool-btn" id="mobile-pan-btn" onclick="toggleMobilePanMode()" title="畫面移動">🖐️ 移動</button>
+        <button class="tool-btn" onclick="mobileZoomIn()" title="放大並同步大屏">🔍+</button>
+        <button class="tool-btn" onclick="mobileZoomOut()" title="縮小並同步大屏">🔍-</button>
+        <button class="tool-btn" onclick="mobileResetZoom()" title="重設 100% 並同步大屏">🔄</button>
       </div>
 
       <div style="display: flex; gap: 8px;">
@@ -581,9 +613,14 @@
     </div>
     <!-- 🌟 全螢幕手繪標註 overlay -->
 <div id="draw-fullscreen-overlay" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:#1c1c1e; z-index:9999;">
-  <canvas id="fs-draw-pad" style="width:100%; height:100%; background-size:contain; background-repeat:no-repeat; background-position:center; touch-action:none;"></canvas>
+  <div id="fs-pad-viewport">
+    <div id="fs-zoom-layer">
+      <img id="fs-pad-img" src="" alt="" draggable="false">
+      <canvas id="fs-draw-pad"></canvas>
+    </div>
+  </div>
 
-  <!-- 懸浮工具列 (包含筆觸顏色、橡皮擦、清除筆跡、移除背景照片、退出) -->
+  <!-- 懸浮工具列 (包含筆觸顏色、橡皮擦、移動縮放、清除筆跡、移除背景照片、退出) -->
  <div class="floating-bar">
     <div class="color-btn" style="background:#ff3b30;" onclick="selectPen('#ff3b30')"></div>
     <div class="color-btn" style="background:#ffcc00;" onclick="selectPen('#ffcc00')"></div>
@@ -591,6 +628,10 @@
     <div class="color-btn" style="background:#007aff;" onclick="selectPen('#007aff')"></div>
     <div class="color-btn" style="background:#ffffff;" onclick="selectPen('#ffffff')"></div>
     <button class="float-btn" id="fs-eraser-btn" style="background:#555;" onclick="toggleEraser()" title="橡皮擦">🧽</button>
+    <button class="float-btn" id="fs-pan-btn" style="background:#555;" onclick="toggleMobilePanMode()" title="移動畫面">🖐️</button>
+    <button class="float-btn" style="background:#475569;" onclick="mobileZoomIn()" title="放大並同步大屏">🔍+</button>
+    <button class="float-btn" style="background:#475569;" onclick="mobileZoomOut()" title="縮小並同步大屏">🔍-</button>
+    <button class="float-btn" style="background:#475569;" onclick="mobileResetZoom()" title="重設 100%">🔄</button>
     <button class="float-btn" style="background:#ff3b30;" onclick="clearCanvas()" title="清除筆跡">🧹</button>
     <button class="float-btn" style="background:#8e8e93;" onclick="clearPhotoBackground()" title="移除背景照片">🗑️</button>
     <button class="float-btn" style="background:#e0245e;" onclick="closeDrawFullscreen()" title="退出全螢幕">↙️</button>
@@ -660,6 +701,7 @@
     let activeIncomingUrlRoomId = '';
     let mobileDrawChildRef = null;
     let mobileDrawValRef = null;
+    let mobileViewTransformRef = null;
     let ftReqRef = null;
     let pushedUrlRef = null;
     let latestIncomingUrl = null;
@@ -703,6 +745,7 @@
       if (ftReqRef) { off(ftReqRef); ftReqRef = null; }
       if (mobileDrawChildRef) { off(mobileDrawChildRef); mobileDrawChildRef = null; }
       if (mobileDrawValRef) { off(mobileDrawValRef); mobileDrawValRef = null; }
+      if (mobileViewTransformRef) { off(mobileViewTransformRef); mobileViewTransformRef = null; }
     }
 
     function forceReleaseUnauthorizedMedia() {
@@ -809,6 +852,7 @@
       listenToPageRequests();
       listenToScreenFtRequests();
       if (typeof listenToScreenDrawEvents === 'function') listenToScreenDrawEvents();
+      if (typeof listenToScreenViewTransform === 'function') listenToScreenViewTransform();
       const fileTab = document.getElementById('file-tab');
       if (fileTab && fileTab.classList.contains('active') && typeof ensureMobileFtConnection === 'function') {
         ensureMobileFtConnection(false);
@@ -1006,8 +1050,8 @@
       currentPhotoIndex = 0;
 
       for (const file of files) {
-        const dataUrl = await processImageFile(file);
-        photoList.push(dataUrl);
+        const processed = await processImageFile(file);
+        photoList.push(processed);
       }
 
       document.getElementById('pdf-pager').style.display = 'none';
@@ -1030,7 +1074,7 @@
             }
             canvas.width = w; canvas.height = h;
             canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-            resolve(canvas.toDataURL('image/jpeg', 0.75));
+            resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.75), ratio: w / h });
           };
           img.src = evt.target.result;
         };
@@ -1043,9 +1087,12 @@
       currentPhotoIndex = index;
       document.getElementById('photo-indicator').innerText = `${currentPhotoIndex + 1} / ${photoList.length}`;
 
-      const dataUrl = photoList[currentPhotoIndex];
+      const item = photoList[currentPhotoIndex];
+      const dataUrl = typeof item === 'string' ? item : item.dataUrl;
+      const photoRatio = (typeof item === 'object' && item.ratio) ? item.ratio : null;
       stopWebRTC();
-      setPadBackground(dataUrl);
+      setPadBackground(dataUrl, photoRatio);
+      if (typeof mobileResetZoom === 'function') mobileResetZoom(false);
 
       const screenId = getScreenId(false);
       if (!ensureRoomAuthorized(true) || !screenId) return;
@@ -1053,10 +1100,12 @@
       update(ref(db, 'screens/' + screenId), {
         mode: 'photo',
         photoUrl: dataUrl,
+        photoRatio: photoRatio || currentMobilePhotoRatio || null,
         photoIndex: currentPhotoIndex + 1,
         photoTotal: photoList.length,
         mediaSubtype: 'photo',
         requestPage: currentPhotoIndex + 1,
+        viewTransform: { scale: 1, cx: 0.5, cy: 0.5, senderId: mobileClientId, updatedAt: Date.now() },
         senderId: mobileClientId,
         updatedAt: Date.now()
       }).then(() => {
@@ -1098,11 +1147,13 @@
 
       await page.render({ canvasContext: ctx, viewport: viewport }).promise;
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      const pdfRatio = canvas.width / canvas.height;
 
       document.getElementById('pdf-indicator').innerText = `第 ${pageNum} / ${pdfDoc.numPages} 頁`;
 
       stopWebRTC();
-      setPadBackground(dataUrl);
+      setPadBackground(dataUrl, pdfRatio);
+      if (typeof mobileResetZoom === 'function') mobileResetZoom(false);
 
       const screenId = getScreenId(false);
       if (!ensureRoomAuthorized(true) || !screenId) return;
@@ -1110,10 +1161,12 @@
       update(ref(db, 'screens/' + screenId), {
         mode: 'photo',
         photoUrl: dataUrl,
+        photoRatio: pdfRatio,
         photoIndex: pageNum,
         photoTotal: pdfDoc.numPages,
         mediaSubtype: 'pdf',
         requestPage: pageNum,
+        viewTransform: { scale: 1, cx: 0.5, cy: 0.5, senderId: mobileClientId, updatedAt: Date.now() },
         senderId: mobileClientId,
         updatedAt: Date.now()
       }).then(() => {
@@ -1482,35 +1535,304 @@ function stopCurrentRecorder(callback) {
       canvas.getContext('2d').drawImage(video, 0, 0, w, h);
       
       const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+      const snapRatio = canvas.width / canvas.height;
       stopWebRTC();
-      setPadBackground(dataUrl);
+      setPadBackground(dataUrl, snapRatio);
+      if (typeof mobileResetZoom === 'function') mobileResetZoom(false);
 
       remove(ref(db, `screens/${screenId}/drawEvents`));
-      set(ref(db, 'screens/' + screenId), { mode: 'photo', photoUrl: dataUrl, senderId: mobileClientId, updatedAt: Date.now() }).then(() => {
+      set(ref(db, 'screens/' + screenId), {
+        mode: 'photo',
+        photoUrl: dataUrl,
+        photoRatio: snapRatio,
+        viewTransform: { scale: 1, cx: 0.5, cy: 0.5, senderId: mobileClientId, updatedAt: Date.now() },
+        senderId: mobileClientId,
+        updatedAt: Date.now()
+      }).then(() => {
         document.getElementById('draw-tab-btn').click();
       });
     };
 
-    function setPadBackground(url) {
-      const pad = document.getElementById('draw-pad');
-      if (url) {
-        pad.style.backgroundImage = `url(${url})`;
-        document.getElementById('draw-status-label').innerText = '📸 已載入內容，請直接在上方圈寫標註：';
+    const mobileCanvasDpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 2.5);
+    const padViewport = document.getElementById('mobile-pad-viewport');
+    const mobileZoomLayer = document.getElementById('mobile-zoom-layer');
+    const mobilePadImg = document.getElementById('mobile-pad-img');
+    const pad = document.getElementById('draw-pad');
+    const pCtx = pad.getContext('2d');
+
+    const fsViewport = document.getElementById('fs-pad-viewport');
+    const fsZoomLayer = document.getElementById('fs-zoom-layer');
+    const fsPadImg = document.getElementById('fs-pad-img');
+    const fsPad = document.getElementById('fs-draw-pad');
+    const fsCtx = fsPad.getContext('2d');
+
+    const liveCanvas = document.getElementById('live-draw-canvas');
+    const lCtx = liveCanvas.getContext('2d');
+
+    let isDrawFullscreen = false;
+    let currentMobilePhotoRatio = null;
+    let mobileLocalDrawHistory = [];
+    let mobileScale = 1, mobileCx = 0.5, mobileCy = 0.5;
+    let mobileActiveMode = 'draw'; // 'draw' 或 'pan'
+    let lastMobileViewSyncAt = 0;
+    let mobileViewSyncTimer = null;
+    let activePadPinching = false;
+
+    function getMobileContainRect(boxW, boxH, mediaRatio) {
+      if (!mediaRatio || !boxW || !boxH) return { x: 0, y: 0, w: boxW, h: boxH };
+      const boxRatio = boxW / boxH;
+      let w, h;
+      if (boxRatio > mediaRatio) {
+        h = boxH;
+        w = h * mediaRatio;
       } else {
-        pad.style.backgroundImage = 'none';
-        document.getElementById('draw-status-label').innerText = '在下方畫布上手指滑動，大屏同步繪製：';
+        w = boxW;
+        h = w / mediaRatio;
+      }
+      return {
+        x: (boxW - w) / 2,
+        y: (boxH - h) / 2,
+        w,
+        h
+      };
+    }
+
+    function applyLayerTransform(layerEl, vw, vh) {
+      if (!layerEl || !vw || !vh) return;
+      if (mobileScale <= 1.001) {
+        layerEl.style.transform = 'translate(0px, 0px) scale(1)';
+        return;
+      }
+      const baseRect = getMobileContainRect(vw, vh, currentMobilePhotoRatio);
+      const iw = baseRect.w || vw;
+      const ih = baseRect.h || vh;
+      const tx = -(mobileCx - 0.5) * iw * mobileScale;
+      const ty = -(mobileCy - 0.5) * ih * mobileScale;
+      layerEl.style.transform = `translate(${tx}px, ${ty}px) scale(${mobileScale})`;
+    }
+
+    function applyMobileZoomLayers() {
+      if (padViewport && padViewport.clientWidth && padViewport.clientHeight) {
+        applyLayerTransform(mobileZoomLayer, padViewport.clientWidth, padViewport.clientHeight);
+      }
+      if (isDrawFullscreen) {
+        applyLayerTransform(fsZoomLayer, window.innerWidth, window.innerHeight);
       }
     }
 
-    window.clearPhotoBackground = function() { 
+    function syncMobileViewTransform(force = false) {
+      if (!ensureRoomAuthorized(false)) return;
+      const screenId = getScreenId(false);
+      if (!screenId) return;
+      const now = Date.now();
+      const pushNow = () => {
+        lastMobileViewSyncAt = Date.now();
+        update(ref(db, `screens/${screenId}`), {
+          viewTransform: {
+            scale: Number(mobileScale.toFixed(4)),
+            cx: Number(mobileCx.toFixed(5)),
+            cy: Number(mobileCy.toFixed(5)),
+            senderId: mobileClientId,
+            updatedAt: lastMobileViewSyncAt
+          }
+        });
+      };
+      clearTimeout(mobileViewSyncTimer);
+      if (force || now - lastMobileViewSyncAt >= 60) {
+        pushNow();
+      } else {
+        mobileViewSyncTimer = setTimeout(pushNow, 60 - (now - lastMobileViewSyncAt));
+      }
+    }
+
+    function listenToScreenViewTransform() {
+      const screenId = getScreenId(false);
+      if (!screenId) return;
+      if (mobileViewTransformRef) off(mobileViewTransformRef);
+      mobileViewTransformRef = ref(db, `screens/${screenId}/viewTransform`);
+      onValue(mobileViewTransformRef, (snap) => {
+        const vt = snap.val();
+        if (!vt || vt.senderId === mobileClientId || activePadPinching) return;
+        const newScale = Math.min(Math.max(1, Number(vt.scale) || 1), 8);
+        mobileScale = newScale;
+        if (mobileScale <= 1.001) {
+          mobileScale = 1;
+          mobileCx = 0.5;
+          mobileCy = 0.5;
+        } else {
+          mobileCx = typeof vt.cx === 'number' ? vt.cx : 0.5;
+          mobileCy = typeof vt.cy === 'number' ? vt.cy : 0.5;
+        }
+        applyMobileZoomLayers();
+      });
+    }
+
+    function mobileZoomByStep(factor, syncRemote = true) {
+      const newScale = Math.min(Math.max(1, mobileScale * factor), 8);
+      if (newScale <= 1.001) {
+        mobileScale = 1;
+        mobileCx = 0.5;
+        mobileCy = 0.5;
+      } else {
+        mobileScale = newScale;
+      }
+      applyMobileZoomLayers();
+      if (syncRemote) syncMobileViewTransform(true);
+    }
+
+    window.mobileZoomIn = function() { mobileZoomByStep(1.25, true); };
+    window.mobileZoomOut = function() { mobileZoomByStep(0.8, true); };
+    window.mobileResetZoom = function(syncRemote = true) {
+      mobileScale = 1;
+      mobileCx = 0.5;
+      mobileCy = 0.5;
+      applyMobileZoomLayers();
+      if (syncRemote) syncMobileViewTransform(true);
+    };
+
+    window.toggleMobilePanMode = function() {
+      mobileActiveMode = (mobileActiveMode === 'pan') ? 'draw' : 'pan';
+      syncMobileModeButtons();
+      syncMobileCanvasCursors();
+    };
+
+    function syncMobileModeButtons() {
+      const panBtn = document.getElementById('mobile-pan-btn');
+      const fsPanBtn = document.getElementById('fs-pan-btn');
+      const isPan = mobileActiveMode === 'pan';
+      if (panBtn) panBtn.classList.toggle('active', isPan);
+      if (fsPanBtn) fsPanBtn.style.background = isPan ? '#007aff' : '#555';
+    }
+
+    function drawStrokeOnZoomPad(targetCtx, targetCanvas, d) {
+      if (!targetCtx || !targetCanvas || !targetCanvas.width || !targetCanvas.height || !d) return;
+      targetCtx.save();
+      targetCtx.beginPath();
+      const usePhotoRect = (d.coordSpace === 'photo' && currentMobilePhotoRatio);
+      const rect = usePhotoRect
+        ? getMobileContainRect(targetCanvas.width, targetCanvas.height, currentMobilePhotoRatio)
+        : { x: 0, y: 0, w: targetCanvas.width, h: targetCanvas.height };
+      targetCtx.moveTo(rect.x + d.x0 * rect.w, rect.y + d.y0 * rect.h);
+      targetCtx.lineTo(rect.x + d.x1 * rect.w, rect.y + d.y1 * rect.h);
+      targetCtx.lineCap = 'round';
+      targetCtx.lineJoin = 'round';
+      if (d.isEraser) {
+        targetCtx.globalCompositeOperation = 'destination-out';
+        if (d.relSize && usePhotoRect) {
+          targetCtx.lineWidth = Math.max(4 * mobileCanvasDpr, d.relSize * rect.w);
+        } else {
+          targetCtx.lineWidth = (d.size || 22) * mobileCanvasDpr;
+        }
+      } else {
+        targetCtx.globalCompositeOperation = 'source-over';
+        targetCtx.strokeStyle = d.color;
+        if (d.relSize && usePhotoRect) {
+          targetCtx.lineWidth = Math.max(1.8 * mobileCanvasDpr, d.relSize * rect.w);
+        } else {
+          targetCtx.lineWidth = Math.max(d.size || 4.5, 2.2) * mobileCanvasDpr;
+        }
+      }
+      targetCtx.stroke();
+      targetCtx.restore();
+    }
+
+    function redrawZoomPad(targetCtx, targetCanvas) {
+      if (!targetCtx || !targetCanvas || !targetCanvas.width || !targetCanvas.height) return;
+      targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+      mobileLocalDrawHistory.forEach(d => drawStrokeOnZoomPad(targetCtx, targetCanvas, d));
+    }
+
+    function redrawAllMobilePads() {
+      redrawZoomPad(pCtx, pad);
+      if (fsPad.width && fsPad.height) {
+        redrawZoomPad(fsCtx, fsPad);
+      }
+    }
+
+    function resizeDrawPad() {
+      if (!padViewport || !padViewport.clientWidth || !padViewport.clientHeight) return;
+      const w = Math.round(padViewport.clientWidth * mobileCanvasDpr);
+      const h = Math.round(padViewport.clientHeight * mobileCanvasDpr);
+      if (pad.width !== w || pad.height !== h) {
+        pad.width = w;
+        pad.height = h;
+      }
+      redrawZoomPad(pCtx, pad);
+      applyMobileZoomLayers();
+    }
+
+    function resizeFsDrawPad() {
+      const w = Math.round(window.innerWidth * mobileCanvasDpr);
+      const h = Math.round(window.innerHeight * mobileCanvasDpr);
+      if (fsPad.width !== w || fsPad.height !== h) {
+        fsPad.width = w;
+        fsPad.height = h;
+      }
+      redrawZoomPad(fsCtx, fsPad);
+      applyMobileZoomLayers();
+    }
+
+    function resizeLiveCanvas() {
+      liveCanvas.width = window.innerWidth;
+      liveCanvas.height = window.innerHeight;
+    }
+
+    window.addEventListener('resize', () => {
+      resizeDrawPad();
+      if (isDrawFullscreen) resizeFsDrawPad();
+      if (liveCanvas.style.pointerEvents === 'auto') resizeLiveCanvas();
+    });
+
+    function setPadBackground(url, knownRatio = null) {
+      const label = document.getElementById('draw-status-label');
+      if (url) {
+        if (knownRatio) currentMobilePhotoRatio = knownRatio;
+        if (mobilePadImg) {
+          mobilePadImg.onload = () => {
+            if (mobilePadImg.naturalWidth && mobilePadImg.naturalHeight) {
+              currentMobilePhotoRatio = mobilePadImg.naturalWidth / mobilePadImg.naturalHeight;
+              applyMobileZoomLayers();
+              redrawAllMobilePads();
+            }
+          };
+          mobilePadImg.src = url;
+          mobilePadImg.style.display = 'block';
+        }
+        if (fsPadImg) {
+          fsPadImg.src = url;
+          fsPadImg.style.display = 'block';
+        }
+        if (label) label.innerText = '📸 單指標註、雙指移動縮放（同步大屏）、三指擦除：';
+        applyMobileZoomLayers();
+        redrawAllMobilePads();
+      } else {
+        currentMobilePhotoRatio = null;
+        if (mobilePadImg) { mobilePadImg.src = ''; mobilePadImg.style.display = 'none'; }
+        if (fsPadImg) { fsPadImg.src = ''; fsPadImg.style.display = 'none'; }
+        if (label) label.innerText = '在畫布上單指滑動標註，雙指移動縮放，大屏同步呈現：';
+        applyMobileZoomLayers();
+        redrawAllMobilePads();
+      }
+    }
+    window.setPadBackground = setPadBackground;
+
+    function syncFsBackground() {
+      if (mobilePadImg && fsPadImg) {
+        fsPadImg.src = mobilePadImg.src || '';
+        fsPadImg.style.display = mobilePadImg.style.display || 'none';
+      }
+    }
+
+    window.clearPhotoBackground = function() {
+      if (!ensureRoomAuthorized(true)) return;
       setPadBackground(null);
+      mobileResetZoom(true);
       document.getElementById('photo-pager').style.display = 'none';
       document.getElementById('pdf-pager').style.display = 'none';
     };
 
     window.toggleLiveDraw = function() {
       isLiveDrawing = !isLiveDrawing;
-      const liveCanvas = document.getElementById('live-draw-canvas');
       const liveBtn = document.getElementById('live-draw-btn');
       const colorBar = document.getElementById('live-color-bar');
 
@@ -1555,10 +1877,9 @@ function stopCurrentRecorder(callback) {
     }
 
     function syncMobileCanvasCursors() {
-      const cur = isEraserMode ? 'none' : 'crosshair';
-      [document.getElementById('draw-pad'), document.getElementById('live-draw-canvas'), document.getElementById('fs-draw-pad')].forEach(el => {
-        if (el) el.style.cursor = cur;
-      });
+      const cur = (mobileActiveMode === 'pan') ? 'grab' : (isEraserMode ? 'none' : 'crosshair');
+      [pad, fsPad].forEach(el => { if (el) el.style.cursor = cur; });
+      if (liveCanvas) liveCanvas.style.cursor = isEraserMode ? 'none' : 'crosshair';
     }
 
     function getMobileTouchMetrics(touches) {
@@ -1580,44 +1901,342 @@ function stopCurrentRecorder(callback) {
     }
 
     window.selectPen = function(color) {
-  isEraserMode = false;
-  currentColor = color;
-  hideMobileEraserRing();
-  syncMobileEraserButtons(false);
-  syncMobileCanvasCursors();
-};
+      mobileActiveMode = 'draw';
+      isEraserMode = false;
+      currentColor = color;
+      hideMobileEraserRing();
+      syncMobileModeButtons();
+      syncMobileEraserButtons(false);
+      syncMobileCanvasCursors();
+    };
 
-   window.toggleEraser = function() {
-  isEraserMode = !isEraserMode;
-  if (!isEraserMode) hideMobileEraserRing();
-  syncMobileEraserButtons(isEraserMode);
-  syncMobileCanvasCursors();
-};
+    window.toggleEraser = function() {
+      mobileActiveMode = 'draw';
+      isEraserMode = !isEraserMode;
+      if (!isEraserMode) hideMobileEraserRing();
+      syncMobileModeButtons();
+      syncMobileEraserButtons(isEraserMode);
+      syncMobileCanvasCursors();
+    };
 
-    // 畫布塗鴉雙向同步
-    const pad = document.getElementById('draw-pad');
-    const pCtx = pad.getContext('2d');
-    const liveCanvas = document.getElementById('live-draw-canvas');
-    const lCtx = liveCanvas.getContext('2d');
-    let drawing = false, lastX = 0, lastY = 0;
-
-    function resizeDrawPad() {
-      if (pad.width !== pad.clientWidth || pad.height !== pad.clientHeight) {
-        pad.width = pad.clientWidth; pad.height = pad.clientHeight;
-      }
+    function getZoomPadCoords(clientX, clientY, targetCanvas) {
+      const rect = targetCanvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return { x: 0, y: 0 };
+      return {
+        x: ((clientX - rect.left) / rect.width) * targetCanvas.width,
+        y: ((clientY - rect.top) / rect.height) * targetCanvas.height
+      };
     }
 
-    function resizeLiveCanvas() {
-      liveCanvas.width = window.innerWidth;
-      liveCanvas.height = window.innerHeight;
-    }
-
-    function pushMobileStroke(targetElement, x0, y0, x1, y1, size, isEraser) {
+    function pushZoomPadStroke(targetCanvas, x0, y0, x1, y1, layerSizeCss, isEraser) {
       const screenId = getScreenId(false);
-      if (!ensureRoomAuthorized(false) || !screenId || !targetElement.width || !targetElement.height) return;
+      if (!ensureRoomAuthorized(false) || !screenId || !targetCanvas.width || !targetCanvas.height) return;
+      const usePhotoRect = !!currentMobilePhotoRatio;
+      const rect = usePhotoRect
+        ? getMobileContainRect(targetCanvas.width, targetCanvas.height, currentMobilePhotoRatio)
+        : { x: 0, y: 0, w: targetCanvas.width, h: targetCanvas.height };
+      const rectCssW = rect.w / mobileCanvasDpr;
+      const relSize = isEraser
+        ? (layerSizeCss / Math.max(1, rectCssW))
+        : Math.max(0.0012, 0.0045 / Math.pow(mobileScale, 0.65));
+
       push(ref(db, `screens/${screenId}/drawEvents`), {
-        x0: x0 / targetElement.width, y0: y0 / targetElement.height,
-        x1: x1 / targetElement.width, y1: y1 / targetElement.height,
+        x0: (x0 - rect.x) / rect.w,
+        y0: (y0 - rect.y) / rect.h,
+        x1: (x1 - rect.x) / rect.w,
+        y1: (y1 - rect.y) / rect.h,
+        coordSpace: usePhotoRect ? 'photo' : 'canvas',
+        relSize: Number(relSize.toFixed(6)),
+        color: currentColor,
+        size: layerSizeCss,
+        isEraser: isEraser,
+        senderId: mobileClientId
+      });
+    }
+
+    function attachZoomPadHandlers(targetCanvas, targetViewport) {
+      let isDrawing = false, lastX = 0, lastY = 0;
+      let isPanning = false, panStartClientX = 0, panStartClientY = 0, panStartCx = 0.5, panStartCy = 0.5;
+      let initPinchDist = null, initPinchScale = 1, pinchStartMidX = 0, pinchStartMidY = 0, pinchStartTx = 0, pinchStartTy = 0;
+
+      function getViewportDims() {
+        const r = targetViewport.getBoundingClientRect();
+        return { vw: r.width || window.innerWidth, vh: r.height || window.innerHeight, left: r.left, top: r.top };
+      }
+
+      function onStart(e) {
+        if (e.type === 'touchstart') e.preventDefault();
+        if (!ensureRoomAuthorized(true)) { isDrawing = false; isPanning = false; return; }
+
+        // 三指以上：立即切換橡皮擦並顯示圓形虛線
+        if (e.touches && e.touches.length >= 3) {
+          pendingMobileTap = false;
+          isMobileTouchMulti = true;
+          activePadPinching = false;
+          isPanning = false;
+          initPinchDist = null;
+          isMobileMultiErasing = true;
+          isDrawing = true;
+
+          const { avgX, avgY, spreadDia } = getMobileTouchMetrics(e.touches);
+          mobileMultiEraserDia = spreadDia;
+          const layerSizeCss = Math.max(4, mobileMultiEraserDia / mobileScale);
+          const coords = getZoomPadCoords(avgX, avgY, targetCanvas);
+          lastX = coords.x; lastY = coords.y;
+
+          showMobileEraserRing(avgX, avgY, layerSizeCss * mobileScale);
+          syncMobileEraserButtons(true);
+          pushZoomPadStroke(targetCanvas, lastX, lastY, lastX + 0.1, lastY + 0.1, layerSizeCss, true);
+          return;
+        }
+
+        // 雙指：移動與縮放（同步大屏）
+        if (e.touches && e.touches.length === 2) {
+          if (isMobileMultiErasing) return;
+          pendingMobileTap = false;
+          hideMobileEraserRing();
+          isMobileTouchMulti = true;
+          activePadPinching = true;
+          isPanning = true;
+          isDrawing = false;
+
+          const { vw, vh } = getViewportDims();
+          const baseRect = getMobileContainRect(vw, vh, currentMobilePhotoRatio);
+          const iw = baseRect.w || vw;
+          const ih = baseRect.h || vh;
+          pinchStartMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+          pinchStartMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+          initPinchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+          initPinchScale = mobileScale;
+          pinchStartTx = -(mobileCx - 0.5) * iw * mobileScale;
+          pinchStartTy = -(mobileCy - 0.5) * ih * mobileScale;
+          return;
+        }
+
+        if (isMobileTouchMulti || isMobileMultiErasing) return;
+
+        // 單指 / 滑鼠移動模式
+        if (mobileActiveMode === 'pan' || e.button === 1 || e.button === 2) {
+          hideMobileEraserRing();
+          isPanning = true;
+          isDrawing = false;
+          const pt = e.touches ? e.touches[0] : e;
+          panStartClientX = pt.clientX;
+          panStartClientY = pt.clientY;
+          panStartCx = mobileCx;
+          panStartCy = mobileCy;
+          targetCanvas.style.cursor = 'grabbing';
+          return;
+        }
+
+        // 單指 / 滑鼠畫筆或工具列橡皮擦
+        isDrawing = true;
+        isPanning = false;
+        const pt = e.touches ? e.touches[0] : e;
+        const coords = getZoomPadCoords(pt.clientX, pt.clientY, targetCanvas);
+        lastX = coords.x; lastY = coords.y;
+
+        const layerSizeCss = Math.max(4, MOBILE_TOOLBAR_ERASER_DIA / mobileScale);
+        if (isEraserMode) {
+          showMobileEraserRing(pt.clientX, pt.clientY, layerSizeCss * mobileScale);
+        } else {
+          hideMobileEraserRing();
+        }
+
+        if (e.touches) {
+          pendingMobileTap = true;
+        } else {
+          pendingMobileTap = false;
+          pushZoomPadStroke(targetCanvas, lastX, lastY, lastX + 0.1, lastY + 0.1, layerSizeCss, isEraserMode);
+        }
+      }
+
+      function onMove(e) {
+        if (e.type === 'touchmove') e.preventDefault();
+
+        if (e.touches && e.touches.length >= 3) {
+          const { avgX, avgY, spreadDia } = getMobileTouchMetrics(e.touches);
+          if (!isMobileMultiErasing) {
+            pendingMobileTap = false;
+            isMobileTouchMulti = true;
+            activePadPinching = false;
+            isPanning = false;
+            initPinchDist = null;
+            isMobileMultiErasing = true;
+            isDrawing = true;
+            mobileMultiEraserDia = spreadDia;
+            const initCoords = getZoomPadCoords(avgX, avgY, targetCanvas);
+            lastX = initCoords.x; lastY = initCoords.y;
+            syncMobileEraserButtons(true);
+          }
+          const layerSizeCss = Math.max(4, mobileMultiEraserDia / mobileScale);
+          const coords = getZoomPadCoords(avgX, avgY, targetCanvas);
+          showMobileEraserRing(avgX, avgY, layerSizeCss * mobileScale);
+          pushZoomPadStroke(targetCanvas, lastX, lastY, coords.x, coords.y, layerSizeCss, true);
+          lastX = coords.x; lastY = coords.y;
+          return;
+        }
+
+        if (isMobileMultiErasing) {
+          hideMobileEraserRing();
+          return;
+        }
+
+        if (isPanning) {
+          hideMobileEraserRing();
+          const { vw, vh, left, top } = getViewportDims();
+          const baseRect = getMobileContainRect(vw, vh, currentMobilePhotoRatio);
+          const iw = baseRect.w || vw;
+          const ih = baseRect.h || vh;
+
+          if (e.touches && e.touches.length === 2 && initPinchDist) {
+            const curDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            const curMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+            const curMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            const newScale = Math.min(Math.max(1, initPinchScale * (curDist / initPinchDist)), 8);
+            const ratio = newScale / initPinchScale;
+            const centerX = left + vw / 2;
+            const centerY = top + vh / 2;
+            const dx0 = pinchStartMidX - centerX;
+            const dy0 = pinchStartMidY - centerY;
+            const dx1 = curMidX - centerX;
+            const dy1 = curMidY - centerY;
+            mobileScale = newScale;
+            if (mobileScale <= 1.001) {
+              mobileScale = 1;
+              mobileCx = 0.5;
+              mobileCy = 0.5;
+            } else {
+              const tx = dx1 - (dx0 - pinchStartTx) * ratio;
+              const ty = dy1 - (dy0 - pinchStartTy) * ratio;
+              mobileCx = 0.5 - tx / (iw * mobileScale);
+              mobileCy = 0.5 - ty / (ih * mobileScale);
+            }
+            applyMobileZoomLayers();
+            syncMobileViewTransform(false);
+          } else if (!isMobileTouchMulti) {
+            const pt = e.touches ? e.touches[0] : e;
+            const dx = pt.clientX - panStartClientX;
+            const dy = pt.clientY - panStartClientY;
+            if (mobileScale > 1.001) {
+              mobileCx = panStartCx - dx / (iw * mobileScale);
+              mobileCy = panStartCy - dy / (ih * mobileScale);
+              applyMobileZoomLayers();
+              syncMobileViewTransform(false);
+            }
+          }
+          return;
+        }
+
+        if (!e.touches && isEraserMode && mobileActiveMode === 'draw' && !isMobileTouchMulti) {
+          const layerSizeCss = Math.max(4, MOBILE_TOOLBAR_ERASER_DIA / mobileScale);
+          showMobileEraserRing(e.clientX, e.clientY, layerSizeCss * mobileScale);
+        } else if (!e.touches) {
+          hideMobileEraserRing();
+        }
+
+        if (!isDrawing || isMobileTouchMulti) return;
+        pendingMobileTap = false;
+        const pt = e.touches ? e.touches[0] : e;
+        const coords = getZoomPadCoords(pt.clientX, pt.clientY, targetCanvas);
+        const layerSizeCss = Math.max(4, MOBILE_TOOLBAR_ERASER_DIA / mobileScale);
+        if (isEraserMode) {
+          showMobileEraserRing(pt.clientX, pt.clientY, layerSizeCss * mobileScale);
+        }
+        pushZoomPadStroke(targetCanvas, lastX, lastY, coords.x, coords.y, layerSizeCss, isEraserMode);
+        lastX = coords.x; lastY = coords.y;
+      }
+
+      function onEnd(e) {
+        if (e && e.type && e.type.startsWith('touch')) e.preventDefault();
+        if (e && e.touches && e.touches.length > 0) {
+          if (isMobileMultiErasing && e.touches.length < 3) hideMobileEraserRing();
+          if (isPanning) syncMobileViewTransform(true);
+          pendingMobileTap = false;
+          isDrawing = false;
+          isPanning = false;
+          return;
+        }
+
+        if (pendingMobileTap && !isMobileTouchMulti && !isMobileMultiErasing && mobileActiveMode === 'draw') {
+          const layerSizeCss = Math.max(4, MOBILE_TOOLBAR_ERASER_DIA / mobileScale);
+          pushZoomPadStroke(targetCanvas, lastX, lastY, lastX + 0.1, lastY + 0.1, layerSizeCss, isEraserMode);
+        }
+
+        const wasPanning = isPanning;
+        pendingMobileTap = false;
+        isMobileTouchMulti = false;
+        activePadPinching = false;
+        isDrawing = false;
+        isPanning = false;
+        initPinchDist = null;
+        if (wasPanning) syncMobileViewTransform(true);
+
+        if (isMobileMultiErasing) {
+          isMobileMultiErasing = false;
+          syncMobileEraserButtons(isEraserMode);
+        }
+
+        if (e && (e.type === 'mouseleave' || (e.type && e.type.startsWith('touch')))) {
+          hideMobileEraserRing();
+        } else if (!isEraserMode || mobileActiveMode !== 'draw') {
+          hideMobileEraserRing();
+        } else if (e && typeof e.clientX === 'number') {
+          const layerSizeCss = Math.max(4, MOBILE_TOOLBAR_ERASER_DIA / mobileScale);
+          showMobileEraserRing(e.clientX, e.clientY, layerSizeCss * mobileScale);
+        }
+        syncMobileCanvasCursors();
+      }
+
+      targetCanvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.15 : 0.85;
+        const newScale = Math.min(Math.max(1, mobileScale * factor), 8);
+        if (newScale <= 1.001) {
+          mobileResetZoom(true);
+        } else {
+          const { vw, vh, left, top } = getViewportDims();
+          const baseRect = getMobileContainRect(vw, vh, currentMobilePhotoRatio);
+          const iw = baseRect.w || vw;
+          const ih = baseRect.h || vh;
+          const oldTx = -(mobileCx - 0.5) * iw * mobileScale;
+          const oldTy = -(mobileCy - 0.5) * ih * mobileScale;
+          const dx = e.clientX - (left + vw / 2);
+          const dy = e.clientY - (top + vh / 2);
+          const ratio = newScale / mobileScale;
+          const newTx = dx - (dx - oldTx) * ratio;
+          const newTy = dy - (dy - oldTy) * ratio;
+          mobileScale = newScale;
+          mobileCx = 0.5 - newTx / (iw * mobileScale);
+          mobileCy = 0.5 - newTy / (ih * mobileScale);
+          applyMobileZoomLayers();
+          syncMobileViewTransform(false);
+        }
+      }, { passive: false });
+
+      targetCanvas.addEventListener('contextmenu', e => e.preventDefault());
+      targetCanvas.addEventListener('touchstart', onStart, { passive: false });
+      targetCanvas.addEventListener('touchmove', onMove, { passive: false });
+      targetCanvas.addEventListener('touchend', onEnd, { passive: false });
+      targetCanvas.addEventListener('touchcancel', onEnd, { passive: false });
+      targetCanvas.addEventListener('mousedown', onStart);
+      targetCanvas.addEventListener('mousemove', onMove);
+      targetCanvas.addEventListener('mouseup', onEnd);
+      targetCanvas.addEventListener('mouseleave', onEnd);
+    }
+
+    attachZoomPadHandlers(pad, padViewport);
+    attachZoomPadHandlers(fsPad, fsViewport);
+
+    // 實況鏡頭畫布獨立事件處理（不縮放）
+    let liveDrawing = false, liveLastX = 0, liveLastY = 0;
+    function pushLiveStroke(x0, y0, x1, y1, size, isEraser) {
+      const screenId = getScreenId(false);
+      if (!ensureRoomAuthorized(false) || !screenId || !liveCanvas.width || !liveCanvas.height) return;
+      push(ref(db, `screens/${screenId}/drawEvents`), {
+        x0: x0 / liveCanvas.width, y0: y0 / liveCanvas.height,
+        x1: x1 / liveCanvas.width, y1: y1 / liveCanvas.height,
+        coordSpace: 'canvas',
         color: currentColor,
         size: size,
         isEraser: isEraser,
@@ -1625,189 +2244,113 @@ function stopCurrentRecorder(callback) {
       });
     }
 
-    function handleStart(e, targetElement) {
+    function handleLiveStart(e) {
       if (e.type === 'touchstart') e.preventDefault();
-      if (!ensureRoomAuthorized(true)) { drawing = false; return; }
-      const sid = getScreenId(false);
-      if (!sid) { drawing = false; return; }
-
-      const rect = targetElement.getBoundingClientRect();
-      const scaleX = rect.width ? (targetElement.width / rect.width) : 1;
-      const scaleY = rect.height ? (targetElement.height / rect.height) : 1;
-
+      if (!ensureRoomAuthorized(true)) { liveDrawing = false; return; }
+      const rect = liveCanvas.getBoundingClientRect();
       if (e.touches && e.touches.length >= 3) {
         pendingMobileTap = false;
         isMobileTouchMulti = true;
         isMobileMultiErasing = true;
-        drawing = true;
+        liveDrawing = true;
         const { avgX, avgY, spreadDia } = getMobileTouchMetrics(e.touches);
         mobileMultiEraserDia = spreadDia;
-        lastX = (avgX - rect.left) * scaleX;
-        lastY = (avgY - rect.top) * scaleY;
-        const ringDia = mobileMultiEraserDia * (rect.width ? (rect.width / targetElement.width) : 1);
-        showMobileEraserRing(avgX, avgY, ringDia);
+        liveLastX = avgX - rect.left; liveLastY = avgY - rect.top;
+        showMobileEraserRing(avgX, avgY, mobileMultiEraserDia);
         syncMobileEraserButtons(true);
-        pushMobileStroke(targetElement, lastX, lastY, lastX + 0.1, lastY + 0.1, mobileMultiEraserDia, true);
+        pushLiveStroke(liveLastX, liveLastY, liveLastX + 0.1, liveLastY + 0.1, mobileMultiEraserDia, true);
         return;
       }
-
       if (e.touches && e.touches.length >= 2) {
         pendingMobileTap = false;
         isMobileTouchMulti = true;
-        if (!isMobileMultiErasing) {
-          drawing = false;
-          hideMobileEraserRing();
-        }
+        if (!isMobileMultiErasing) { liveDrawing = false; hideMobileEraserRing(); }
         return;
       }
-
       if (isMobileTouchMulti || isMobileMultiErasing) return;
-
-      drawing = true;
-      const touch = e.touches ? e.touches[0] : e;
-      lastX = (touch.clientX - rect.left) * scaleX;
-      lastY = (touch.clientY - rect.top) * scaleY;
-
-      if (isEraserMode) {
-        const ringDia = MOBILE_TOOLBAR_ERASER_DIA * (rect.width ? (rect.width / targetElement.width) : 1);
-        showMobileEraserRing(touch.clientX, touch.clientY, ringDia);
-      } else {
-        hideMobileEraserRing();
-      }
-
-      if (e.touches) {
-        pendingMobileTap = true;
-      } else {
+      liveDrawing = true;
+      const pt = e.touches ? e.touches[0] : e;
+      liveLastX = pt.clientX - rect.left; liveLastY = pt.clientY - rect.top;
+      if (isEraserMode) showMobileEraserRing(pt.clientX, pt.clientY, MOBILE_TOOLBAR_ERASER_DIA);
+      else hideMobileEraserRing();
+      if (e.touches) pendingMobileTap = true;
+      else {
         pendingMobileTap = false;
-        pushMobileStroke(targetElement, lastX, lastY, lastX + 0.1, lastY + 0.1, isEraserMode ? MOBILE_TOOLBAR_ERASER_DIA : 4.5, isEraserMode);
+        pushLiveStroke(liveLastX, liveLastY, liveLastX + 0.1, liveLastY + 0.1, isEraserMode ? MOBILE_TOOLBAR_ERASER_DIA : 4.5, isEraserMode);
       }
     }
 
-    function handleMove(e, targetCtx, targetElement) {
+    function handleLiveMove(e) {
       if (e.type === 'touchmove') e.preventDefault();
-      const rect = targetElement.getBoundingClientRect();
-      const scaleX = rect.width ? (targetElement.width / rect.width) : 1;
-      const scaleY = rect.height ? (targetElement.height / rect.height) : 1;
-
+      const rect = liveCanvas.getBoundingClientRect();
       if (e.touches && e.touches.length >= 3) {
-        const sid = getScreenId(false);
-        if (!sid) return;
         const { avgX, avgY, spreadDia } = getMobileTouchMetrics(e.touches);
         if (!isMobileMultiErasing) {
-          pendingMobileTap = false;
-          isMobileTouchMulti = true;
-          isMobileMultiErasing = true;
-          drawing = true;
+          pendingMobileTap = false; isMobileTouchMulti = true; isMobileMultiErasing = true; liveDrawing = true;
           mobileMultiEraserDia = spreadDia;
-          lastX = (avgX - rect.left) * scaleX;
-          lastY = (avgY - rect.top) * scaleY;
+          liveLastX = avgX - rect.left; liveLastY = avgY - rect.top;
           syncMobileEraserButtons(true);
         }
-        const currentX = (avgX - rect.left) * scaleX;
-        const currentY = (avgY - rect.top) * scaleY;
-        const ringDia = mobileMultiEraserDia * (rect.width ? (rect.width / targetElement.width) : 1);
-        showMobileEraserRing(avgX, avgY, ringDia);
-        pushMobileStroke(targetElement, lastX, lastY, currentX, currentY, mobileMultiEraserDia, true);
-        lastX = currentX; lastY = currentY;
+        const cx = avgX - rect.left, cy = avgY - rect.top;
+        showMobileEraserRing(avgX, avgY, mobileMultiEraserDia);
+        pushLiveStroke(liveLastX, liveLastY, cx, cy, mobileMultiEraserDia, true);
+        liveLastX = cx; liveLastY = cy;
         return;
       }
-
-      if (isMobileMultiErasing) {
-        hideMobileEraserRing();
-        return;
-      }
-
-      if (!e.touches && isEraserMode) {
-        const ringDia = MOBILE_TOOLBAR_ERASER_DIA * (rect.width ? (rect.width / targetElement.width) : 1);
-        showMobileEraserRing(e.clientX, e.clientY, ringDia);
-      } else if (!e.touches) {
-        hideMobileEraserRing();
-      }
-
-      if (!drawing || isMobileTouchMulti) return;
+      if (isMobileMultiErasing) { hideMobileEraserRing(); return; }
+      if (!e.touches && isEraserMode) showMobileEraserRing(e.clientX, e.clientY, MOBILE_TOOLBAR_ERASER_DIA);
+      else if (!e.touches) hideMobileEraserRing();
+      if (!liveDrawing || isMobileTouchMulti) return;
       pendingMobileTap = false;
-      const screenId = getScreenId(false); if (!screenId) return;
-      const touch = e.touches ? e.touches[0] : e;
-      const currentX = (touch.clientX - rect.left) * scaleX;
-      const currentY = (touch.clientY - rect.top) * scaleY;
-
-      if (isEraserMode) {
-        const ringDia = MOBILE_TOOLBAR_ERASER_DIA * (rect.width ? (rect.width / targetElement.width) : 1);
-        showMobileEraserRing(touch.clientX, touch.clientY, ringDia);
-      }
-
-      pushMobileStroke(targetElement, lastX, lastY, currentX, currentY, isEraserMode ? MOBILE_TOOLBAR_ERASER_DIA : 4.5, isEraserMode);
-      lastX = currentX; lastY = currentY;
+      const pt = e.touches ? e.touches[0] : e;
+      const cx = pt.clientX - rect.left, cy = pt.clientY - rect.top;
+      if (isEraserMode) showMobileEraserRing(pt.clientX, pt.clientY, MOBILE_TOOLBAR_ERASER_DIA);
+      pushLiveStroke(liveLastX, liveLastY, cx, cy, isEraserMode ? MOBILE_TOOLBAR_ERASER_DIA : 4.5, isEraserMode);
+      liveLastX = cx; liveLastY = cy;
     }
 
-    function handleEnd(e, targetElement) {
+    function handleLiveEnd(e) {
       if (e && e.type && e.type.startsWith('touch')) e.preventDefault();
       if (e && e.touches && e.touches.length > 0) {
         if (isMobileMultiErasing && e.touches.length < 3) hideMobileEraserRing();
-        pendingMobileTap = false;
-        drawing = false;
-        return;
+        pendingMobileTap = false; liveDrawing = false; return;
       }
-
-      if (pendingMobileTap && !isMobileTouchMulti && !isMobileMultiErasing && targetElement) {
-        pushMobileStroke(targetElement, lastX, lastY, lastX + 0.1, lastY + 0.1, isEraserMode ? MOBILE_TOOLBAR_ERASER_DIA : 4.5, isEraserMode);
+      if (pendingMobileTap && !isMobileTouchMulti && !isMobileMultiErasing) {
+        pushLiveStroke(liveLastX, liveLastY, liveLastX + 0.1, liveLastY + 0.1, isEraserMode ? MOBILE_TOOLBAR_ERASER_DIA : 4.5, isEraserMode);
       }
-
-      pendingMobileTap = false;
-      isMobileTouchMulti = false;
-      drawing = false;
-
-      if (isMobileMultiErasing) {
-        isMobileMultiErasing = false;
-        syncMobileEraserButtons(isEraserMode);
-      }
-
-      if (e && (e.type === 'mouseleave' || (e.type && e.type.startsWith('touch')))) {
-        hideMobileEraserRing();
-      } else if (!isEraserMode) {
-        hideMobileEraserRing();
-      } else if (e && typeof e.clientX === 'number' && targetElement) {
-        const rect = targetElement.getBoundingClientRect();
-        const ringDia = MOBILE_TOOLBAR_ERASER_DIA * (rect.width ? (rect.width / targetElement.width) : 1);
-        showMobileEraserRing(e.clientX, e.clientY, ringDia);
-      }
+      pendingMobileTap = false; isMobileTouchMulti = false; liveDrawing = false;
+      if (isMobileMultiErasing) { isMobileMultiErasing = false; syncMobileEraserButtons(isEraserMode); }
+      if (e && (e.type === 'mouseleave' || (e.type && e.type.startsWith('touch')))) hideMobileEraserRing();
+      else if (!isEraserMode) hideMobileEraserRing();
     }
 
-    pad.addEventListener('touchstart', e => handleStart(e, pad), { passive: false });
-    pad.addEventListener('touchmove', e => handleMove(e, pCtx, pad), { passive: false });
-    pad.addEventListener('touchend', e => handleEnd(e, pad), { passive: false });
-    pad.addEventListener('touchcancel', e => handleEnd(e, pad), { passive: false });
-    pad.addEventListener('mousedown', e => handleStart(e, pad));
-    pad.addEventListener('mousemove', e => handleMove(e, pCtx, pad));
-    pad.addEventListener('mouseup', e => handleEnd(e, pad));
-    pad.addEventListener('mouseleave', e => handleEnd(e, pad));
+    liveCanvas.addEventListener('touchstart', handleLiveStart, { passive: false });
+    liveCanvas.addEventListener('touchmove', handleLiveMove, { passive: false });
+    liveCanvas.addEventListener('touchend', handleLiveEnd, { passive: false });
+    liveCanvas.addEventListener('touchcancel', handleLiveEnd, { passive: false });
+    liveCanvas.addEventListener('mousedown', handleLiveStart);
+    liveCanvas.addEventListener('mousemove', handleLiveMove);
+    liveCanvas.addEventListener('mouseup', handleLiveEnd);
+    liveCanvas.addEventListener('mouseleave', handleLiveEnd);
 
-    liveCanvas.addEventListener('touchstart', e => handleStart(e, liveCanvas), { passive: false });
-    liveCanvas.addEventListener('touchmove', e => handleMove(e, lCtx, liveCanvas), { passive: false });
-    liveCanvas.addEventListener('touchend', e => handleEnd(e, liveCanvas), { passive: false });
-    liveCanvas.addEventListener('touchcancel', e => handleEnd(e, liveCanvas), { passive: false });
-    liveCanvas.addEventListener('mousedown', e => handleStart(e, liveCanvas));
-    liveCanvas.addEventListener('mousemove', e => handleMove(e, lCtx, liveCanvas));
-    liveCanvas.addEventListener('mouseup', e => handleEnd(e, liveCanvas));
-    liveCanvas.addEventListener('mouseleave', e => handleEnd(e, liveCanvas));
-
-    function drawOnMobileCanvas(targetCtx, targetCanvas, d) {
-      if (!targetCtx || !targetCanvas) return;
-      targetCtx.beginPath();
-      targetCtx.moveTo(d.x0 * targetCanvas.width, d.y0 * targetCanvas.height);
-      targetCtx.lineTo(d.x1 * targetCanvas.width, d.y1 * targetCanvas.height);
+    function drawOnLiveCanvas(d) {
+      if (!lCtx || !liveCanvas || !d) return;
+      lCtx.save();
+      lCtx.beginPath();
+      lCtx.moveTo(d.x0 * liveCanvas.width, d.y0 * liveCanvas.height);
+      lCtx.lineTo(d.x1 * liveCanvas.width, d.y1 * liveCanvas.height);
+      lCtx.lineCap = 'round';
+      lCtx.lineJoin = 'round';
       if (d.isEraser) {
-        targetCtx.globalCompositeOperation = 'destination-out';
-        targetCtx.lineWidth = d.size || 22;
+        lCtx.globalCompositeOperation = 'destination-out';
+        lCtx.lineWidth = d.size || 22;
       } else {
-        targetCtx.globalCompositeOperation = 'source-over';
-        targetCtx.strokeStyle = d.color;
-        targetCtx.lineWidth = Math.max(d.size || 4.5, 2.5);
+        lCtx.globalCompositeOperation = 'source-over';
+        lCtx.strokeStyle = d.color;
+        lCtx.lineWidth = Math.max(d.size || 4.5, 2.5);
       }
-      targetCtx.lineCap = 'round';
-      targetCtx.lineJoin = 'round';
-      targetCtx.stroke();
-      targetCtx.globalCompositeOperation = 'source-over';
+      lCtx.stroke();
+      lCtx.restore();
     }
 
     // 接收大屏端畫筆筆跡（雙向同步至一般與全螢幕畫布）
@@ -1821,20 +2364,22 @@ function stopCurrentRecorder(callback) {
       onChildAdded(mobileDrawChildRef, (snapshot) => {
         const d = snapshot.val();
         if (d) {
-          drawOnMobileCanvas(pCtx, pad, d);
-          if (typeof fsCtx !== 'undefined' && typeof fsPad !== 'undefined') {
-            drawOnMobileCanvas(fsCtx, fsPad, d);
+          mobileLocalDrawHistory.push(d);
+          drawStrokeOnZoomPad(pCtx, pad, d);
+          if (fsPad.width && fsPad.height) {
+            drawStrokeOnZoomPad(fsCtx, fsPad, d);
           }
+          if (isLiveDrawing) drawOnLiveCanvas(d);
         }
       });
 
       mobileDrawValRef = ref(db, `screens/${screenId}/drawEvents`);
       onValue(mobileDrawValRef, (snapshot) => {
         if (!snapshot.exists()) {
+          mobileLocalDrawHistory = [];
           pCtx.clearRect(0, 0, pad.width, pad.height);
-          if (typeof fsCtx !== 'undefined' && typeof fsPad !== 'undefined') {
-            fsCtx.clearRect(0, 0, fsPad.width, fsPad.height);
-          }
+          lCtx.clearRect(0, 0, liveCanvas.width, liveCanvas.height);
+          fsCtx.clearRect(0, 0, fsPad.width, fsPad.height);
         }
       });
     }
@@ -1842,11 +2387,10 @@ function stopCurrentRecorder(callback) {
     window.clearCanvas = function() {
       if (!ensureRoomAuthorized(true)) return;
       const screenId = getScreenId(false); if (!screenId) return;
+      mobileLocalDrawHistory = [];
       pCtx.clearRect(0, 0, pad.width, pad.height);
       lCtx.clearRect(0, 0, liveCanvas.width, liveCanvas.height);
-      if (typeof fsCtx !== 'undefined' && typeof fsPad !== 'undefined') {
-        fsCtx.clearRect(0, 0, fsPad.width, fsPad.height);
-      }
+      fsCtx.clearRect(0, 0, fsPad.width, fsPad.height);
       remove(ref(db, `screens/${screenId}/drawEvents`));
     };
 
@@ -1867,79 +2411,39 @@ function stopCurrentRecorder(callback) {
       if (stopBtn) stopBtn.style.display = isRunning ? 'block' : 'none';
     }
     window.resetRemoteScreen = function() {
-  if (!ensureRoomAuthorized(true)) return;
-  const screenId = getScreenId(false);
-  if (!screenId) return;
-  
-  if (confirm('確定要結束大屏當前投放，讓大屏返回待機 QR Code 畫面嗎？')) {
-    stopWebRTC(); // 若手機正在開鏡頭/麥克風，先停止本地傳輸
-    
-    // 傳送 idle 指令給 Firebase，大屏收到後會立刻重設畫面（保留鎖定狀態）
-    set(ref(db, 'screens/' + screenId), {
-      mode: 'idle',
-      senderId: mobileClientId,
-      updatedAt: Date.now()
-    }).then(() => {
-      alert('已成功讓大屏返回待機畫面！');
-    });
-  }
-};
-    let isDrawFullscreen = false;
-const fsPad = document.getElementById('fs-draw-pad');
-const fsCtx = fsPad.getContext('2d');
+      if (!ensureRoomAuthorized(true)) return;
+      const screenId = getScreenId(false);
+      if (!screenId) return;
+      
+      if (confirm('確定要結束大屏當前投放，讓大屏返回待機 QR Code 畫面嗎？')) {
+        stopWebRTC(); // 若手機正在開鏡頭/麥克風，先停止本地傳輸
+        
+        // 傳送 idle 指令給 Firebase，大屏收到後會立刻重設畫面（保留鎖定狀態）
+        set(ref(db, 'screens/' + screenId), {
+          mode: 'idle',
+          senderId: mobileClientId,
+          updatedAt: Date.now()
+        }).then(() => {
+          alert('已成功讓大屏返回待機畫面！');
+        });
+      }
+    };
 
-// 1. 開啟全螢幕標註模式
-window.openDrawFullscreen = function() {
-  isDrawFullscreen = true;
-  document.getElementById('draw-fullscreen-overlay').style.display = 'block';
-  resizeFsDrawPad();
-  syncFsBackground();
-};
+    // 1. 開啟全螢幕標註模式
+    window.openDrawFullscreen = function() {
+      isDrawFullscreen = true;
+      document.getElementById('draw-fullscreen-overlay').style.display = 'block';
+      syncFsBackground();
+      resizeFsDrawPad();
+    };
 
-// 2. 退出全螢幕標註模式
-window.closeDrawFullscreen = function() {
-  isDrawFullscreen = false;
-  hideMobileEraserRing();
-  document.getElementById('draw-fullscreen-overlay').style.display = 'none';
-  resizeDrawPad(); // 重新整理普通模式畫布
-};
-
-// 同步背景圖片至全螢幕畫布
-function syncFsBackground() {
-  const normalPad = document.getElementById('draw-pad');
-  fsPad.style.backgroundImage = normalPad.style.backgroundImage;
-}
-
-// 調整全螢幕畫布尺寸
-function resizeFsDrawPad() {
-  fsPad.width = window.innerWidth;
-  fsPad.height = window.innerHeight;
-}
-
-// 修改原有的 setPadBackground 讓全螢幕模式同步更新背景圖片
-const originalSetPadBackground = window.setPadBackground;
-window.setPadBackground = function(url) {
-  const pad = document.getElementById('draw-pad');
-  if (url) {
-    pad.style.backgroundImage = `url(${url})`;
-    fsPad.style.backgroundImage = `url(${url})`;
-    document.getElementById('draw-status-label').innerText = '📸 已載入內容，請直接在上方圈寫標註：';
-  } else {
-    pad.style.backgroundImage = 'none';
-    fsPad.style.backgroundImage = 'none';
-    document.getElementById('draw-status-label').innerText = '在下方畫布上手指滑動，大屏同步繪製：';
-  }
-};
-
-// 綁定全螢幕畫布觸控與繪圖事件
-fsPad.addEventListener('touchstart', e => handleStart(e, fsPad), { passive: false });
-fsPad.addEventListener('touchmove', e => handleMove(e, fsCtx, fsPad), { passive: false });
-fsPad.addEventListener('touchend', e => handleEnd(e, fsPad), { passive: false });
-fsPad.addEventListener('touchcancel', e => handleEnd(e, fsPad), { passive: false });
-fsPad.addEventListener('mousedown', e => handleStart(e, fsPad));
-fsPad.addEventListener('mousemove', e => handleMove(e, fsCtx, fsPad));
-fsPad.addEventListener('mouseup', e => handleEnd(e, fsPad));
-fsPad.addEventListener('mouseleave', e => handleEnd(e, fsPad));
+    // 2. 退出全螢幕標註模式
+    window.closeDrawFullscreen = function() {
+      isDrawFullscreen = false;
+      hideMobileEraserRing();
+      document.getElementById('draw-fullscreen-overlay').style.display = 'none';
+      resizeDrawPad(); // 重新整理普通模式畫布並維持目前縮放視角
+    };
   
     // ==========================================
     // 📁 手機端雙向 P2P 檔案傳輸模組 (WebRTC DataChannel)
